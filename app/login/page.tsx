@@ -25,11 +25,11 @@ export default function AdminLogin() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        // ✅ router.push এর বদলে উইন্ডো হার্ড ডিরেক্ট রিডাইরেক্ট, যা কুকি পারফেক্টলি সিঙ্ক করবে
+        // Native window redirect to ensure cookies sync perfectly across subdomains
         window.location.href = "/dashboard";
       } else {
         setError(data.error || "Invalid email or password. Please try again.");
-        setIsLoading(false); // Verifying আটকে থাকা রোধ করতে এখানে ফলস করা হয়েছে
+        setIsLoading(false); 
       }
     } catch {
       setError("Something went wrong. Please try again.");
@@ -59,7 +59,7 @@ export default function AdminLogin() {
           </div>
         )}
 
-        <form onSubmit={handleLogin} className="space-y-5">
+        <form onSubmit={handleLogin} className="space-y-5" autoComplete="off">
           <div>
             <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider mb-1.5">
               Admin Email / ID
@@ -70,8 +70,9 @@ export default function AdminLogin() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@onecarta.shop"
-                className="w-full pl-10 pr-4 py-3 bg-gray-900/50 border border-gray-700 text-white rounded-xl text-sm font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-gray-600"
+                placeholder="Enter Email/ID" 
+                autoComplete="new-email" 
+                className="w-full pl-10 pr-4 py-3 bg-gray-900/50 border border-gray-700 text-white rounded-xl text-sm font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-gray-500"
               />
               <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
             </div>
@@ -87,8 +88,9 @@ export default function AdminLogin() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-10 pr-12 py-3 bg-gray-900/50 border border-gray-700 text-white rounded-xl text-sm font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-gray-600"
+                placeholder="Enter Password" 
+                autoComplete="new-password" 
+                className="w-full pl-10 pr-12 py-3 bg-gray-900/50 border border-gray-700 text-white rounded-xl text-sm font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-gray-500"
               />
               <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
               <button
