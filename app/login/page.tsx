@@ -70,7 +70,7 @@ export default function AdminLogin() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter Email/ID" 
+                placeholder="Enter Email" 
                 autoComplete="new-email" 
                 className="w-full pl-10 pr-4 py-3 bg-gray-900/50 border border-gray-700 text-white rounded-xl text-sm font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-gray-500"
               />
