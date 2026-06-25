@@ -7,7 +7,8 @@ import {
   Video, Percent, Package, Truck, Layers, Info, Loader2,
   Bold, Italic, Underline, Quote, List, ListOrdered, 
   Link2, AlignLeft, AlignCenter, AlignRight, Type, Trash2,
-  ChevronUp, ChevronDown, Edit3, Copy, GripVertical, ExternalLink, ArrowUpDown
+  ChevronUp, ChevronDown, Edit3, Copy, GripVertical, ExternalLink, ArrowUpDown,
+  CheckCircle2, XCircle, AlertTriangle
 } from "lucide-react";
 
 interface Category {
@@ -45,6 +46,8 @@ interface SpecificationField {
   detailDescription: string;
 }
 
+type ToastState = { message: string; type: "success" | "error" } | null;
+
 export default function PremiumProductManager() {
   const [view, setView] = useState<"list" | "add">("list");
   const [products, setProducts] = useState<Product[]>([]);
@@ -57,6 +60,12 @@ export default function PremiumProductManager() {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [qtySortOrder, setQtySortOrder] = useState<"asc" | "desc" | null>(null);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+
+  // Multi-select / bulk action states
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<string[] | null>(null); // ids pending delete confirmation
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [toast, setToast] = useState<ToastState>(null);
 
   // Pagination and Row Count Limit States
   const [currentPage, setCurrentPage] = useState(1);
@@ -123,6 +132,13 @@ export default function PremiumProductManager() {
     window.addEventListener("click", handleOutsideClick);
     return () => window.removeEventListener("click", handleOutsideClick);
   }, []);
+
+  // Auto-dismiss toast after 3 seconds
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   // Rich Text Editor Command
   const handleEditorCommand = (command: string, value: string = "") => {
@@ -239,17 +255,95 @@ export default function PremiumProductManager() {
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this product?")) return;
-    try {
-      const res = await fetch(`/api/products?id=${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setProducts(products.filter((p) => p._id !== id));
+  // ---------- Selection helpers ----------
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allCurrentSelected =
+    currentProducts.length > 0 && currentProducts.every((p) => selectedIds.has(p._id));
+
+  const toggleSelectAllCurrentPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allCurrentSelected) {
+        currentProducts.forEach((p) => next.delete(p._id));
       } else {
-        alert("Failed to delete the product");
+        currentProducts.forEach((p) => next.add(p._id));
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  // ---------- Delete flow (single or bulk) ----------
+  const requestDelete = (ids: string[]) => setDeleteTarget(ids);
+
+  const executeDelete = async () => {
+    if (!deleteTarget || deleteTarget.length === 0) return;
+    setIsDeleting(true);
+    try {
+      let res: Response;
+      if (deleteTarget.length === 1) {
+        res = await fetch(`/api/products?id=${deleteTarget[0]}`, { method: "DELETE" });
+      } else {
+        res = await fetch("/api/products", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: deleteTarget }),
+        });
+      }
+
+      if (res.ok) {
+        const deletedSet = new Set(deleteTarget);
+        setProducts((prev) => prev.filter((p) => !deletedSet.has(p._id)));
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          deletedSet.forEach((id) => next.delete(id));
+          return next;
+        });
+        setToast({
+          message: deleteTarget.length > 1 ? `${deleteTarget.length} products deleted` : "Product deleted",
+          type: "success",
+        });
+      } else {
+        const data = await res.json().catch(() => ({} as any));
+        setToast({ message: data.error || "Failed to delete product(s)", type: "error" });
       }
     } catch (err) {
-      alert("Operational server error occurred");
+      setToast({ message: "A server error occurred while deleting", type: "error" });
+    } finally {
+      setIsDeleting(false);
+      setDeleteTarget(null);
+    }
+  };
+
+  // ---------- Bulk status update ----------
+  const bulkUpdateStatus = async (newStatus: string) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    try {
+      const res = await fetch("/api/products", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, updates: { status: newStatus } }),
+      });
+
+      if (res.ok) {
+        setToast({ message: `${ids.length} product(s) set to ${newStatus}`, type: "success" });
+        clearSelection();
+      } else {
+        const data = await res.json().catch(() => ({} as any));
+        setToast({ message: data.error || "Failed to update products", type: "error" });
+      }
+    } catch (err) {
+      setToast({ message: "A server error occurred while updating", type: "error" });
     }
   };
 
@@ -327,11 +421,14 @@ export default function PremiumProductManager() {
         setApplyDefaultShipping(true); setShippingDefaultCharge("0"); setShippingInsideDhaka("80"); setShippingOutsideDhaka("130");
         setVariants([]); setSpecifications([]);
         setView("list");
+        setToast({ message: "Product created", type: "success" });
       } else {
         setError(data.error || "Failed to upload product");
+        setToast({ message: data.error || "Failed to upload product", type: "error" });
       }
     } catch (err) {
       setError("An operational server error occurred");
+      setToast({ message: "An operational server error occurred", type: "error" });
     } finally {
       setIsSubmitting(false);
     }
@@ -371,11 +468,55 @@ export default function PremiumProductManager() {
             <button type="button" className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-600 flex items-center gap-2 hover:bg-gray-50 shadow-2xs"><SlidersHorizontal size={16} /> Show All</button>
           </div>
 
+          {/* ==================== BULK ACTION BAR ==================== */}
+          {selectedIds.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-indigo-600 text-white rounded-xl px-5 py-3 shadow-sm animate-fadeIn">
+              <div className="flex items-center gap-3 text-sm font-medium">
+                <span>{selectedIds.size} selected</span>
+                <button type="button" onClick={clearSelection} className="text-indigo-200 hover:text-white underline text-xs cursor-pointer">
+                  Clear
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => bulkUpdateStatus("ACTIVE")}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Set Active
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulkUpdateStatus("DRAFT")}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Set Draft
+                </button>
+                <button
+                  type="button"
+                  onClick={() => requestDelete(Array.from(selectedIds))}
+                  className="px-3 py-1.5 bg-red-500 hover:bg-red-600 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 size={14} /> Delete Selected
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-visible">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
                   <tr className="bg-gray-50/70 text-gray-400 uppercase tracking-wider border-b border-gray-100 text-xs font-semibold select-none">
+                    <th className="p-4 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={allCurrentSelected}
+                        onChange={toggleSelectAllCurrentPage}
+                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        title="Select all on this page"
+                      />
+                    </th>
                     <th className="p-4 w-10 text-center"></th>
                     <th className="p-4">Product</th>
                     <th className="p-4">Type</th>
@@ -406,8 +547,18 @@ export default function PremiumProductManager() {
                       onDrop={() => handleDrop(idx)}
                       className={`hover:bg-gray-50/40 transition-all group ${
                         draggedIdx === indexOfFirstProduct + idx ? "opacity-40 bg-gray-100" : ""
-                      }`}
+                      } ${selectedIds.has(prod._id) ? "bg-indigo-50/40" : ""}`}
                     >
+
+                      {/* Row select checkbox */}
+                      <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(prod._id)}
+                          onChange={() => toggleSelectOne(prod._id)}
+                          className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </td>
                       
                       {/* Workable Drag Grip Controller column */}
                       <td className="p-4 text-center text-gray-300 cursor-move" title="Drag row to reorder up/down">
@@ -490,7 +641,7 @@ export default function PremiumProductManager() {
                               <div className="border-t border-gray-50 my-1"></div>
                               <button 
                                 type="button"
-                                onClick={() => handleDeleteProduct(prod._id)}
+                                onClick={() => requestDelete([prod._id])}
                                 className="w-full px-3.5 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 flex items-center gap-2.5 cursor-pointer"
                               >
                                 <Trash2 size={14} className="text-red-400" /> Delete
@@ -970,6 +1121,61 @@ export default function PremiumProductManager() {
             </div>
           </div>
         </form>
+      )}
+
+      {/* ==================== DELETE CONFIRMATION MODAL ==================== */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 space-y-5 animate-fadeIn">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">
+                  Delete {deleteTarget.length > 1 ? `${deleteTarget.length} products` : "this product"}?
+                </h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  This action cannot be undone. {deleteTarget.length > 1 ? "All selected products" : "This product"} will be permanently removed.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 rounded-xl border border-gray-200 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+              >
+                {isDeleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== TOAST NOTIFICATION ==================== */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 z-[100] px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center gap-2.5 animate-fadeIn ${
+            toast.type === "success" ? "bg-emerald-600 text-white" : "bg-red-600 text-white"
+          }`}
+        >
+          {toast.type === "success" ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+          {toast.message}
+          <button type="button" onClick={() => setToast(null)} className="ml-2 text-white/70 hover:text-white cursor-pointer">
+            <X size={14} />
+          </button>
+        </div>
       )}
 
     </div>
