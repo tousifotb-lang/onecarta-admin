@@ -1,3 +1,4 @@
+// Place this file at: app/manage-store/page.tsx
 "use client";
 
 import React, { useState, useEffect } from "react";
@@ -105,18 +106,18 @@ export default function ManageStoreConfigurationPanel() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] text-gray-800 antialiased font-sans p-6 sm:p-8 lg:p-10 select-none">
-      
-      {/* Upper Functional Header Block - Bold & Premium Spatial Geometry */}
-      <div className="max-w-7xl mx-auto space-y-2 pb-8 border-b border-gray-200/60 mb-10">
-        <h1 className="text-2xl font-black text-gray-900 tracking-tight sm:text-3xl">Admin Operations Center</h1>
+    <div className="min-h-screen bg-[#f8f9fa] text-gray-800 antialiased font-sans p-6 sm:p-8 select-none">
+
+      {/* Header */}
+      <div className="w-full space-y-2 pb-8 border-b border-gray-200/60 mb-10">
+        <h1 className="text-xl font-semibold text-gray-900 tracking-tight">Admin Operations Center</h1>
         <p className="text-sm sm:text-base text-gray-500 font-medium max-w-3xl leading-relaxed">
           Master administration console to authorize systemic core store updates, catalog infrastructures, financial gateways modules, and automated external integrations.
         </p>
       </div>
 
-      {/* Grid Architecture Optimized for Visibility and Size Comfort */}
-      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+      {/* Cards Grid */}
+      <div className="w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {adminManagementCards.map((card) => {
           const status = statusMap[card.id];
 
@@ -127,8 +128,8 @@ export default function ManageStoreConfigurationPanel() {
               className="bg-white border border-gray-200 hover:border-indigo-500/50 rounded-2xl p-7 flex flex-col justify-between group transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl hover:shadow-indigo-500/5 cursor-pointer"
             >
               <div className="space-y-5">
-                
-                {/* Header Box Row Containing Enlarged Icon and Badges */}
+
+                {/* Icon + Badge row */}
                 <div className="flex items-center justify-between">
                   <div className="p-3.5 bg-indigo-50/80 group-hover:bg-indigo-600 group-hover:text-white rounded-2xl transition-all duration-300 text-indigo-600 shrink-0 shadow-xs">
                     {card.icon}
@@ -146,8 +147,8 @@ export default function ManageStoreConfigurationPanel() {
                     </span>
                   )}
                 </div>
-                
-                {/* Text Block - Upgraded Size Properties to avoid cramped look */}
+
+                {/* Text */}
                 <div className="space-y-2">
                   <h3 className="text-base sm:text-lg font-extrabold text-gray-900 tracking-tight group-hover:text-indigo-600 transition-colors duration-200">
                     {card.title}
