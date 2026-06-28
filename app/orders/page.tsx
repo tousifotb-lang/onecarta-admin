@@ -7,13 +7,19 @@ import {
   Loader2, ArrowUpDown, ChevronDown, ChevronUp,
   Calendar, Download, CheckCircle2, AlertCircle, Clock,
   User, MapPin, Phone, Clipboard, FileText, Check, X, ShoppingBag,
-  Plus, Package, Users, ExternalLink, Trash2, Mail, ShieldCheck, Truck, Image as ImageIcon
+  Plus, Package, Users, ExternalLink, Trash2, Mail, ShieldCheck, Truck, Image as ImageIcon,
+  PackageCheck, PackageX, CircleDot, History
 } from "lucide-react";
 
 interface OrderItem {
   name: string;
   qty: number;
   unitPrice: number;
+}
+
+interface StatusHistoryEntry {
+  status: string;
+  changedAt: string;
 }
 
 interface Order {
@@ -28,6 +34,10 @@ interface Order {
   paymentStatus: "PAID" | "PENDING" | "FAILED";
   deliveryStatus: "Placed" | "On Hold" | "Confirmed" | "Shipped" | "Delivered" | "Completed" | "Cancelled" | "Returned" | "Payment OnProcess" | "Payment Failed";
   createdAt: string;
+  updatedAt?: string;
+  // REAL-TIME STATUS TIMELINE: present on orders created/updated after this feature
+  // shipped. Older orders may not have this array at all — handled gracefully below.
+  statusHistory?: StatusHistoryEntry[];
   items: OrderItem[];
 }
 
@@ -54,6 +64,96 @@ interface Product {
 interface OrderLineItem {
   product: Product;
   qty: number;
+}
+
+// Canonical status progression used to render the timeline in a sensible order
+// for "forward" flows. Cancelled/Returned/Payment Failed are terminal/branch
+// states and are always rendered last, tagged distinctly.
+const STATUS_FLOW_ORDER = [
+  "Placed",
+  "On Hold",
+  "Confirmed",
+  "Shipped",
+  "Delivered",
+  "Completed",
+];
+const TERMINAL_STATUSES = ["Cancelled", "Returned", "Payment Failed"];
+
+function getStatusTimelineIcon(status: string) {
+  switch (status) {
+    case "Placed": return <ShoppingBag size={13} />;
+    case "On Hold": return <Clock size={13} />;
+    case "Confirmed": return <CheckCircle2 size={13} />;
+    case "Shipped": return <Truck size={13} />;
+    case "Delivered": return <PackageCheck size={13} />;
+    case "Completed": return <PackageCheck size={13} />;
+    case "Cancelled": return <PackageX size={13} />;
+    case "Returned": return <PackageX size={13} />;
+    case "Payment OnProcess": return <Clock size={13} />;
+    case "Payment Failed": return <PackageX size={13} />;
+    default: return <CircleDot size={13} />;
+  }
+}
+
+function getStatusTimelineColor(status: string) {
+  switch (status) {
+    case "Placed": return { dot: "bg-purple-600", ring: "ring-purple-100", text: "text-purple-700" };
+    case "On Hold": return { dot: "bg-amber-500", ring: "ring-amber-100", text: "text-amber-700" };
+    case "Confirmed": return { dot: "bg-blue-600", ring: "ring-blue-100", text: "text-blue-700" };
+    case "Shipped": return { dot: "bg-cyan-600", ring: "ring-cyan-100", text: "text-cyan-700" };
+    case "Delivered": return { dot: "bg-lime-600", ring: "ring-lime-100", text: "text-lime-700" };
+    case "Completed": return { dot: "bg-emerald-600", ring: "ring-emerald-100", text: "text-emerald-700" };
+    case "Cancelled": return { dot: "bg-pink-600", ring: "ring-pink-100", text: "text-pink-700" };
+    case "Returned": return { dot: "bg-orange-600", ring: "ring-orange-100", text: "text-orange-700" };
+    case "Payment OnProcess": return { dot: "bg-indigo-600", ring: "ring-indigo-100", text: "text-indigo-700" };
+    case "Payment Failed": return { dot: "bg-red-600", ring: "ring-red-100", text: "text-red-700" };
+    default: return { dot: "bg-gray-400", ring: "ring-gray-100", text: "text-gray-600" };
+  }
+}
+
+function formatTimelineDate(dateString: string) {
+  const d = new Date(dateString);
+  return d.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function formatTimelineTime(dateString: string) {
+  const d = new Date(dateString);
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Builds the ordered list of timeline steps to render for a given order.
+// - If the order HAS statusHistory (new orders): use the real recorded entries,
+//   in the order they actually happened, each with its real timestamp.
+// - If the order has NO statusHistory (legacy orders, created before this
+//   feature): fall back to just two known points — "Placed" at createdAt, and
+//   the current deliveryStatus at updatedAt (if different from Placed) — and
+//   mark everything else as not tracked.
+function buildTimelineSteps(order: Order) {
+  if (order.statusHistory && order.statusHistory.length > 0) {
+    return {
+      steps: order.statusHistory.map((entry) => ({
+        status: entry.status,
+        changedAt: entry.changedAt,
+        tracked: true,
+      })),
+      isLegacy: false,
+    };
+  }
+
+  // Legacy fallback — no recorded history
+  const steps: { status: string; changedAt: string; tracked: boolean }[] = [
+    { status: "Placed", changedAt: order.createdAt, tracked: true },
+  ];
+
+  if (order.deliveryStatus !== "Placed") {
+    steps.push({
+      status: order.deliveryStatus,
+      changedAt: order.updatedAt || order.createdAt,
+      tracked: true,
+    });
+  }
+
+  return { steps, isLegacy: true };
 }
 
 export default function OrderManagerMatrix() {
@@ -1438,21 +1538,98 @@ export default function OrderManagerMatrix() {
 
       {selectedOrderDetails && (
         <div className="fixed inset-0 bg-gray-950/40 backdrop-blur-2xs z-50 flex items-center justify-center p-4" onClick={() => setSelectedOrderDetails(null)}>
-          <div className="bg-white rounded-2xl max-w-lg w-full border border-gray-100 shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-gray-50 flex items-center justify-between bg-gray-50/50">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-gray-100 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-gray-50 flex items-center justify-between bg-gray-50/50 shrink-0">
               <div>
                 <h3 className="font-semibold text-gray-900 text-[15px]">Order Invoice Elements</h3>
                 <p className="text-xs font-mono text-indigo-600 mt-0.5">ID: #{selectedOrderDetails.orderId}</p>
               </div>
               <button type="button" onClick={() => setSelectedOrderDetails(null)} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-all cursor-pointer"><X size={16} /></button>
             </div>
-            <div className="p-5 space-y-4 text-sm text-gray-600">
+            <div className="p-5 space-y-4 text-sm text-gray-600 overflow-y-auto">
               <div className="bg-gray-50/50 border border-gray-100 p-4 rounded-xl space-y-1.5">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Recipient Details</p>
                 <p className="font-semibold text-gray-900">{selectedOrderDetails.customerName}</p>
                 <p className="text-xs font-mono">{selectedOrderDetails.customerPhone}</p>
                 <p className="text-xs">{selectedOrderDetails.customerAddress}</p>
               </div>
+
+              {/* ==================================================== */}
+              {/* REAL-TIME ORDER STATUS TIMELINE                       */}
+              {/* ==================================================== */}
+              {(() => {
+                const { steps, isLegacy } = buildTimelineSteps(selectedOrderDetails);
+                return (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <History size={13} className="text-indigo-500" /> Order Timeline
+                      </p>
+                      {isLegacy && (
+                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                          Partial history
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="bg-gray-50/50 border border-gray-100 rounded-xl p-4">
+                      <div className="relative">
+                        {steps.map((step, idx) => {
+                          const colors = getStatusTimelineColor(step.status);
+                          const isLast = idx === steps.length - 1;
+                          const isTerminal = TERMINAL_STATUSES.includes(step.status);
+                          return (
+                            <div key={idx} className="flex gap-3 relative">
+                              {/* Connector line */}
+                              {!isLast && (
+                                <div className="absolute left-[11px] top-6 bottom-0 w-[2px] bg-gray-200" />
+                              )}
+                              {/* Dot */}
+                              <div className={`relative z-10 shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-white ${colors.dot} ring-4 ${colors.ring}`}>
+                                {getStatusTimelineIcon(step.status)}
+                              </div>
+                              {/* Content */}
+                              <div className={`flex-1 ${isLast ? "pb-0" : "pb-5"}`}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className={`text-xs font-black ${colors.text}`}>
+                                    {step.status}
+                                    {isTerminal && (
+                                      <span className="ml-1.5 text-[9px] font-bold text-gray-400 uppercase">(Final)</span>
+                                    )}
+                                  </span>
+                                  {isLast && !isLegacy && (
+                                    <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                                      Current
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] font-semibold text-gray-500 mt-0.5">
+                                  {formatTimelineDate(step.changedAt)} • {formatTimelineTime(step.changedAt)}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Legacy notice: explain the gap between Placed and current status */}
+                        {isLegacy && selectedOrderDetails.deliveryStatus !== "Placed" && (
+                          <div className="flex gap-3 relative mt-1">
+                            <div className="relative z-10 shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-gray-400 bg-gray-100 ring-4 ring-gray-50 border border-dashed border-gray-300">
+                              <CircleDot size={12} />
+                            </div>
+                            <div className="flex-1 pt-0.5">
+                              <span className="text-[11px] font-semibold text-gray-400 italic">
+                                Intermediate steps not tracked for this order
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="space-y-2.5">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Purchased Items</p>
                 {selectedOrderDetails.items.map((item, index) => (

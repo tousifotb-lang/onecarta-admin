@@ -2,6 +2,14 @@ import { NextResponse } from "next/server";
 import clientPromise from "../../../lib/mongodb";
 import { ObjectId } from "mongodb";
 
+// Minimal shape used only so the MongoDB driver knows statusHistory is an
+// array field it can $push into (fixes "PushOperator<Document>" TS error).
+interface OrderDoc {
+  statusHistory?: { status: string; changedAt: Date }[];
+  deliveryStatus: string;
+  updatedAt: Date;
+}
+
 // GET: Fetch all orders from MongoDB, most recent first
 export async function GET() {
   try {
@@ -77,6 +85,9 @@ export async function POST(request: Request) {
     // Generate a short numeric-style order ID (matches the existing "#2368431" style)
     const orderId = String(Math.floor(1000000 + Math.random() * 9000000));
 
+    const createdAt = new Date();
+    const initialStatus = deliveryStatus || "Placed";
+
     const newOrder = {
       orderId,
       customerName: String(customerName).trim(),
@@ -100,11 +111,17 @@ export async function POST(request: Request) {
       totalAmount,
       paymentStatus: paymentStatus === "Fully Paid" ? "PAID" : "PENDING",
       partialPaidAmount: paymentStatus === "Partial" ? Number(partialPaidAmount) || 0 : totalAmount,
-      deliveryStatus: deliveryStatus || "Placed",
+      deliveryStatus: initialStatus,
+      // REAL-TIME STATUS TIMELINE: every status this order has ever had, with the
+      // exact timestamp it was set. The "Placed" (or whatever the order starts as)
+      // entry is recorded right away so the timeline has a starting point.
+      statusHistory: [
+        { status: initialStatus, changedAt: createdAt },
+      ],
       isFraud: !!isFraud,
       note: note || "",
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt,
+      updatedAt: createdAt,
     };
 
     const result = await db.collection("orders").insertOne(newOrder);
@@ -131,10 +148,17 @@ export async function PATCH(request: Request) {
     }
 
     const objectIds = orderIds.map((id: string) => new ObjectId(id));
+    const changedAt = new Date();
 
-    const result = await db.collection("orders").updateMany(
+    // REAL-TIME STATUS TIMELINE: every time the status changes, push a new
+    // { status, changedAt } entry onto statusHistory instead of overwriting it.
+    // This is how the "View Order" timeline knows exactly when each stage happened.
+    const result = await db.collection<OrderDoc>("orders").updateMany(
       { _id: { $in: objectIds } },
-      { $set: { deliveryStatus, updatedAt: new Date() } }
+      {
+        $set: { deliveryStatus, updatedAt: changedAt },
+        $push: { statusHistory: { status: deliveryStatus, changedAt } },
+      }
     );
 
     return NextResponse.json(
