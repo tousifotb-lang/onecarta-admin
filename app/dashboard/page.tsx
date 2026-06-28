@@ -6,8 +6,8 @@ import {
   ArrowRight, Copy, Globe, Banknote, ShoppingCart, 
   Package, Users, Eye, TrendingUp, AlertCircle, 
   Plus, BarChart3, Folder, Palette, Settings, Loader2,
-  TriangleAlert, Rocket, Zap, PackageX, Clock3, CheckCircle2,
-  Truck, XCircle, RotateCcw, Hash, Calendar, Download, ChevronDown
+  TriangleAlert, Rocket, Zap, Clock3, CheckCircle2,
+  Truck, XCircle, Calendar, Download, ChevronDown, Bell, CheckSquare, Square
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -76,7 +76,6 @@ interface AnalyticsData {
   revenueOverview: RevenuePoint[];
 }
 
-// Distinct colors per order status for the donut chart
 const STATUS_COLORS: Record<string, string> = {
   Placed: "#9333ea",
   "On Hold": "#d97706",
@@ -91,9 +90,6 @@ const STATUS_COLORS: Record<string, string> = {
 };
 const DEFAULT_STATUS_COLOR = "#94a3b8";
 
-// Converts an ISO date string into a human-readable relative time
-// (e.g. "5m ago", "3h ago", "2d ago"). Falls back to a short date
-// once the order is older than 7 days.
 function getRelativeTime(dateString: string): string {
   const then = new Date(dateString).getTime();
   const now = Date.now();
@@ -125,16 +121,41 @@ export default function RealTimeDashboard() {
   const [isRangeLoading, setIsRangeLoading] = useState(false);
   const [greeting, setGreeting] = useState({ text: "Good morning", emoji: "☀️" });
 
-  // Live Database Sync Fetch. When start/end are provided, only the revenueOverview
-  // series (and its surrounding data) is refetched for that custom date range.
+  // DYNAMIC PLACED POPUP STATES
+  const [placedOrders, setPlacedOrders] = useState<Order[]>([]);
+  const [showNewOrderPopup, setShowNewOrderPopup] = useState(false);
+  
+  // REAL-TIME MULTIPLE SELECTOR STATE
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // "ARE YOU SURE?" CONFIRMATION DIALOG STATE
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+
   async function getLiveDashboardData(startDate?: string, endDate?: string) {
     try {
       const query = startDate && endDate ? `?startDate=${startDate}&endDate=${endDate}` : "";
       const res = await fetch(`/api/analytics${query}`);
       const json = await res.json();
-      if (res.ok) setData(json);
+      if (res.ok) {
+        setData(json);
+        
+        if (json.recentOrders) {
+          const matchingOrders = json.recentOrders.filter(
+            (order: Order) => order.status.toLowerCase() === "placed"
+          );
+          setPlacedOrders(matchingOrders);
+          
+          // Fixed implicit 'any' by explicitly mapping with defined 'Order' interface type
+          setSelectedOrderIds(matchingOrders.map((o: Order) => o._id));
+          
+          if (matchingOrders.length > 0 && !sessionStorage.getItem("popupClosedManually")) {
+            setShowNewOrderPopup(true);
+          }
+        }
+      }
     } catch (err) {
-      console.error("Live sync failed");
+      console.error("Live sync failed", err);
     } finally {
       setIsLoading(false);
       setIsRangeLoading(false);
@@ -142,15 +163,66 @@ export default function RealTimeDashboard() {
   }
 
   useEffect(() => {
-    // Dynamic Time-Based Greeting
     const currentHour = new Date().getHours();
     if (currentHour >= 5 && currentHour < 12) setGreeting({ text: "Good morning", emoji: "☀️" });
     else if (currentHour >= 12 && currentHour < 16) setGreeting({ text: "Good afternoon", emoji: "🌤️" });
     else if (currentHour >= 16 && currentHour < 19) setGreeting({ text: "Good evening", emoji: "🌆" });
     else setGreeting({ text: "Good night", emoji: "🌙" });
 
+    sessionStorage.removeItem("popupClosedManually");
     getLiveDashboardData();
   }, []);
+
+  // STEP 1: Button click only opens the "Are you sure?" dialog — no API call yet
+  const requestConfirmOrders = () => {
+    if (selectedOrderIds.length === 0) return;
+    setShowConfirmDialog(true);
+  };
+
+  // STEP 2: This is the actual API call — only runs after the user taps "Yes, Confirm"
+  const handleConfirmOrders = async () => {
+    setShowConfirmDialog(false);
+    if (selectedOrderIds.length === 0) return;
+    setIsUpdatingStatus(true);
+    try {
+      const res = await fetch("/api/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderIds: selectedOrderIds,
+          deliveryStatus: "Confirmed"
+        })
+      });
+
+      if (res.ok) {
+        setShowNewOrderPopup(false);
+        getLiveDashboardData();
+      } else {
+        alert("Failed to update status. Please try again.");
+      }
+    } catch (error) {
+      console.error("Network crash checking", error);
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  // MULTIPLE CHECKBOX CONTROLLERS
+  const toggleSelectOrder = (id: string) => {
+    if (selectedOrderIds.includes(id)) {
+      setSelectedOrderIds(selectedOrderIds.filter(item => item !== id));
+    } else {
+      setSelectedOrderIds([...selectedOrderIds, id]);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedOrderIds.length === placedOrders.length) {
+      setSelectedOrderIds([]);
+    } else {
+      setSelectedOrderIds(placedOrders.map((o: Order) => o._id));
+    }
+  };
 
   const handleApplyCustomRange = () => {
     if (!customStartDate || !customEndDate) return;
@@ -171,7 +243,6 @@ export default function RealTimeDashboard() {
     getLiveDashboardData();
   };
 
-  // Export the currently displayed Revenue Overview series to an Excel (.xlsx) file
   const handleExportRevenueToExcel = () => {
     if (!data?.revenueOverview || data.revenueOverview.length === 0) {
       alert("No revenue data to export.");
@@ -195,6 +266,11 @@ export default function RealTimeDashboard() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const closePopupManually = () => {
+    setShowNewOrderPopup(false);
+    sessionStorage.setItem("popupClosedManually", "true");
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#f8f9fa] flex items-center justify-center gap-2 font-bold text-gray-500 text-xs tracking-wider uppercase">
@@ -206,10 +282,157 @@ export default function RealTimeDashboard() {
   return (
     <div className="min-h-screen bg-[#f8f9fa] text-gray-800 p-4 sm:p-6 lg:p-8 space-y-6 antialiased">
       
+      {/* ========================================== */}
+      {/* NEW BULK-MANAGED SELECTABLE POPUP MODAL    */}
+      {/* ========================================== */}
+      {showNewOrderPopup && placedOrders.length > 0 && (
+        <div className="fixed inset-0 bg-gray-950/60 backdrop-blur-xs z-100 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-purple-100 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
+            
+            {/* Header section with Select All logic */}
+            <div className="p-5 border-b border-purple-50 flex flex-col gap-3 bg-purple-50/70">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-purple-600 text-white rounded-xl">
+                    <Bell size={18} />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-gray-950 text-sm uppercase tracking-wide">
+                      New Action Required
+                    </h3>
+                    <p className="text-[10px] font-bold text-purple-700">You have {placedOrders.length} order(s) waiting to be accepted</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={closePopupManually} 
+                  className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-white rounded-xl shadow-2xs transition-all cursor-pointer"
+                >
+                  <XCircle size={20} />
+                </button>
+              </div>
+
+              {/* Select All Toggle Bar */}
+              <div className="flex items-center justify-between bg-white/60 border border-purple-100/50 rounded-xl px-3 py-2 text-xs">
+                <button 
+                  onClick={toggleSelectAll}
+                  className="flex items-center gap-2 text-gray-700 font-bold hover:text-purple-700 cursor-pointer transition-colors"
+                >
+                  {selectedOrderIds.length === placedOrders.length ? (
+                    <CheckSquare size={16} className="text-purple-600" />
+                  ) : (
+                    <Square size={16} className="text-gray-400" />
+                  )}
+                  Select All Placed Orders
+                </button>
+                <span className="font-black text-purple-700 font-mono">{selectedOrderIds.length}/{placedOrders.length} Selected</span>
+              </div>
+            </div>
+            
+            {/* Scrollable list items with separate checkboxes */}
+            <div className="p-5 space-y-3 overflow-y-auto bg-gray-50/50">
+              {placedOrders.map((order) => {
+                const isChecked = selectedOrderIds.includes(order._id);
+                return (
+                  <div 
+                    key={order._id} 
+                    onClick={() => toggleSelectOrder(order._id)}
+                    className={`bg-white border rounded-xl p-4 shadow-2xs flex items-start gap-3 transition-all cursor-pointer select-none ${
+                      isChecked ? "border-purple-500 bg-purple-50/10" : "border-purple-100 hover:border-purple-300"
+                    }`}
+                  >
+                    <div className="mt-0.5 text-purple-600 shrink-0">
+                      {isChecked ? <CheckSquare size={18} /> : <Square size={18} className="text-gray-300" />}
+                    </div>
+
+                    <div className="flex-1 space-y-3">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="text-xs font-black text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md">
+                            #{order.orderId}
+                          </span>
+                          <h4 className="text-sm font-black text-gray-900 mt-1.5">{order.customerName}</h4>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-black text-gray-950">BDT {order.totalAmount.toLocaleString()}</p>
+                          <span className="text-[10px] font-bold text-gray-400 block mt-0.5">{order.itemsCount} item(s)</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex justify-between items-center text-[11px] pt-2 border-t border-gray-100">
+                        <span className="font-semibold text-gray-400">Method: {order.paymentMethod}</span>
+                        <span className="font-medium text-purple-600">{getRelativeTime(order.createdAt)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Combined actions row footer */}
+            <div className="p-4 border-t border-gray-100 bg-white flex items-center justify-end gap-2.5">
+              <button 
+                onClick={requestConfirmOrders}
+                disabled={selectedOrderIds.length === 0 || isUpdatingStatus}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                {isUpdatingStatus && <Loader2 size={14} className="animate-spin" />}
+                Confirm Selected ({selectedOrderIds.length})
+              </button>
+              
+              <button 
+                onClick={closePopupManually}
+                disabled={isUpdatingStatus}
+                className="px-4 py-2 bg-gray-900 text-white rounded-xl text-xs font-bold hover:bg-gray-800 transition-all cursor-pointer"
+              >
+                Got it, Review Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================== */}
+      {/* "ARE YOU SURE?" CONFIRMATION MODAL          */}
+      {/* ========================================== */}
+      {showConfirmDialog && (
+        <div className="fixed inset-0 bg-gray-950/60 backdrop-blur-xs z-110 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-sm w-full border border-purple-100 shadow-2xl overflow-hidden">
+            <div className="p-5 flex flex-col items-center text-center gap-3">
+              <div className="p-3 bg-purple-50 text-purple-600 rounded-full">
+                <AlertCircle size={22} />
+              </div>
+              <h3 className="font-black text-gray-900 text-sm">Are you sure?</h3>
+              <p className="text-xs font-medium text-gray-500 leading-relaxed">
+                You&apos;re about to confirm{" "}
+                <span className="font-black text-gray-800">{selectedOrderIds.length} order(s)</span>.
+                This will update their status to{" "}
+                <span className="font-black text-purple-700">Confirmed</span>.
+              </p>
+            </div>
+            <div className="p-4 border-t border-gray-100 bg-gray-50/60 flex items-center justify-center gap-2.5">
+              <button
+                onClick={() => setShowConfirmDialog(false)}
+                className="flex-1 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-all cursor-pointer"
+              >
+                No, go back
+              </button>
+              <button
+                onClick={handleConfirmOrders}
+                disabled={isUpdatingStatus}
+                className="flex-1 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                {isUpdatingStatus && <Loader2 size={14} className="animate-spin" />}
+                Yes, Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 1. TOP HEADER BANNER */}
       <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4 w-full sm:w-auto">
-          <div className="border border-gray-100 rounded-xl p-2 bg-white shadow-2xs flex items-center justify-center h-[52px] w-[140px]">
+          <div className="border border-gray-100 rounded-xl p-2 bg-white shadow-2xs flex items-center justify-center h-13 w-35">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img 
               src="/logo.png" 
@@ -243,7 +466,7 @@ export default function RealTimeDashboard() {
         </div>
       </div>
 
-      {/* 2. MATRIX CARDS ROW — LIFETIME TOTALS (click any card for details) */}
+      {/* 2. MATRIX CARDS ROW — LIFETIME TOTALS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div 
           onClick={() => setActiveDetailModal("revenue")}
@@ -306,7 +529,7 @@ export default function RealTimeDashboard() {
         </div>
       </div>
 
-      {/* 3. CHART & GRAPH SECTION — REAL RECHARTS GRAPHS */}
+      {/* 3. CHART & GRAPH SECTION */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-xs lg:col-span-2 space-y-4 relative">
           <div className="flex items-center justify-between">
@@ -537,7 +760,6 @@ export default function RealTimeDashboard() {
 
       {/* 5. BOTTOM GRID PANEL */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        
         {/* Low Stock Panel */}
         <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-xs space-y-4 relative overflow-hidden">
           <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500"></div>
@@ -561,7 +783,7 @@ export default function RealTimeDashboard() {
                 data.lowStockItems.map((item, index) => (
                   <tr key={index}>
                     <td className="py-3 pl-2 text-gray-400 font-mono">{index + 1}</td>
-                    <td className="py-3 font-bold truncate max-w-[120px]">{item.title}</td>
+                    <td className="py-3 font-bold truncate max-w-30">{item.title}</td>
                     <td className="py-3 text-right text-amber-600 font-black font-mono">{item.stock}</td>
                   </tr>
                 ))
@@ -595,7 +817,7 @@ export default function RealTimeDashboard() {
                     <td className="py-3 pl-2 text-gray-400 font-mono flex items-center justify-center">
                       <span className="w-4 h-4 bg-orange-50 text-orange-600 rounded-full flex items-center justify-center font-black text-[9px]">{index + 1}</span>
                     </td>
-                    <td className="py-3 font-bold truncate max-w-[120px]">{item.title}</td>
+                    <td className="py-3 font-bold truncate max-w-30">{item.title}</td>
                     <td className="py-3 text-right text-gray-900 font-black font-mono">{item.sold}</td>
                   </tr>
                 ))
@@ -636,10 +858,9 @@ export default function RealTimeDashboard() {
             </button>
           </div>
         </div>
-
       </div>
 
-      {/* DETAIL MODAL — opens when a stat card is clicked. Does not alter the dashboard layout itself. */}
+      {/* DETAIL MODAL */}
       {activeDetailModal && (
         <div 
           className="fixed inset-0 bg-gray-950/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
