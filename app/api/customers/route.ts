@@ -1,28 +1,38 @@
 import { NextResponse } from "next/server";
 import clientPromise from "../../../lib/mongodb";
 
-// GET: Build the customer list by aggregating unique customers (by phone number)
-// out of the orders collection. There is no separate registered-customer merge
-// yet — that will be added once the storefront's registration system is wired
-// up to this admin panel's backend.
+interface Customer {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  ordersCount: number;
+  district: string;
+  address: string;
+  joinedDate: string;
+  isRegistered: boolean;
+}
+
 export async function GET() {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
 
-    const orders = await db.collection("orders").find({}).sort({ createdAt: 1 }).toArray();
+    const [orders, users] = await Promise.all([
+      db.collection("orders").find({}).sort({ createdAt: 1 }).toArray(),
+      db.collection("users").find({ role: { $ne: "admin" } }).toArray(),
+    ]);
 
-    const customerMap = new Map<
+    // Step 1: aggregate order stats per phone number (first order date preserved)
+    const orderStatsByPhone = new Map
       string,
       {
-        id: string;
-        name: string;
-        email: string;
-        phone: string;
         ordersCount: number;
         district: string;
         address: string;
-        joinedDate: string; // ISO string of the first order's createdAt
+        latestName: string;
+        latestEmail: string;
+        firstOrderDate: string;
       }
     >();
 
@@ -30,25 +40,70 @@ export async function GET() {
       const phone = order.customerPhone;
       if (!phone) return;
 
-      const existing = customerMap.get(phone);
+      const existing = orderStatsByPhone.get(phone);
       if (existing) {
         existing.ordersCount += 1;
-        // Keep the most recent name/address/email in case it was corrected on a later order
-        existing.name = order.customerName || existing.name;
+        existing.latestName = order.customerName || existing.latestName;
+        existing.latestEmail = order.customerEmail || existing.latestEmail;
+        existing.district = order.district || existing.district;
         existing.address = order.customerAddress || existing.address;
-        existing.email = order.customerEmail || existing.email;
       } else {
-        customerMap.set(phone, {
-          id: phone, // phone number doubles as a stable unique id here
-          name: order.customerName || "Unknown",
-          email: order.customerEmail || "",
-          phone,
+        orderStatsByPhone.set(phone, {
           ordersCount: 1,
           district: order.district || "",
           address: order.customerAddress || "",
-          joinedDate: order.createdAt ? new Date(order.createdAt).toISOString() : new Date().toISOString(),
+          latestName: order.customerName || "",
+          latestEmail: order.customerEmail || "",
+          firstOrderDate: order.createdAt
+            ? new Date(order.createdAt).toISOString()
+            : new Date().toISOString(),
         });
       }
+    });
+
+    const customerMap = new Map<string, Customer>();
+
+    // Step 2: registered users are the source of truth for identity
+    users.forEach((user: any) => {
+      const phone = user.phone || "";
+      const stats = phone ? orderStatsByPhone.get(phone) : undefined;
+      const defaultAddress =
+        Array.isArray(user.addresses) && user.addresses.length > 0
+          ? user.addresses.find((a: any) => a.isDefault) || user.addresses[0]
+          : null;
+
+      const key = phone || user.email || user._id.toString();
+
+      customerMap.set(key, {
+        id: user._id.toString(),
+        name: user.name || stats?.latestName || "Unknown",
+        email: user.email || "",
+        phone,
+        ordersCount: stats?.ordersCount || 0,
+        district: stats?.district || defaultAddress?.district || "",
+        address: stats?.address || defaultAddress?.homeAddress || "",
+        joinedDate: user.createdAt
+          ? new Date(user.createdAt).toISOString()
+          : new Date().toISOString(),
+        isRegistered: true,
+      });
+
+      if (phone) orderStatsByPhone.delete(phone);
+    });
+
+    // Step 3: remaining phones are guest (order-only) customers
+    orderStatsByPhone.forEach((stats, phone) => {
+      customerMap.set(phone, {
+        id: phone,
+        name: stats.latestName || "Unknown",
+        email: stats.latestEmail || "",
+        phone,
+        ordersCount: stats.ordersCount,
+        district: stats.district,
+        address: stats.address,
+        joinedDate: stats.firstOrderDate,
+        isRegistered: false,
+      });
     });
 
     const customers = Array.from(customerMap.values()).sort(
