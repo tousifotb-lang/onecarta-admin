@@ -24,17 +24,16 @@ export async function GET() {
     ]);
 
     // Step 1: aggregate order stats per phone number (first order date preserved)
-    const orderStatsByPhone = new Map
-      string,
-      {
-        ordersCount: number;
-        district: string;
-        address: string;
-        latestName: string;
-        latestEmail: string;
-        firstOrderDate: string;
-      }
-    >();
+    type OrderStats = {
+      ordersCount: number;
+      district: string;
+      address: string;
+      latestName: string;
+      latestEmail: string;
+      firstOrderDate: string;
+    };
+
+    const orderStatsByPhone = new Map<string, OrderStats>();
 
     orders.forEach((order) => {
       const phone = order.customerPhone;
