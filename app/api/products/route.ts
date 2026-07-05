@@ -2,36 +2,16 @@ import { NextResponse } from "next/server";
 import clientPromise from "../../../lib/mongodb";
 import { ObjectId } from "mongodb";
 
-// GET: Fetch all products from MongoDB, with category populated
+// GET: Fetch all products from MongoDB
 export async function GET() {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
 
-    // Use aggregation to join each product with its category document
-    // so the frontend receives `category: { _id, name, slug }` instead of a raw ObjectId.
     const products = await db
       .collection("products")
-      .aggregate([
-        {
-          $lookup: {
-            from: "categories",
-            localField: "categoryId",
-            foreignField: "_id",
-            as: "categoryInfo",
-          },
-        },
-        {
-          $addFields: {
-            category: { $arrayElemAt: ["$categoryInfo", 0] },
-          },
-        },
-        {
-          $project: {
-            categoryInfo: 0, // drop the temporary array, keep "category" object
-          },
-        },
-      ])
+      .find({})
+      .sort({ createdAt: -1 })
       .toArray();
 
     return NextResponse.json(products, { status: 200 });
@@ -40,52 +20,137 @@ export async function GET() {
   }
 }
 
-// POST: Add a new real product to MongoDB
+// Helper: try to resolve a categoryId ObjectId from either a provided
+// categoryId, or by looking up the categories collection using the
+// human-readable category name/slug the admin form sends.
+async function resolveCategoryId(
+  db: any,
+  category: string,
+  providedCategoryId?: string
+): Promise<ObjectId | null> {
+  // 1) If the caller already sent a valid categoryId, just use it.
+  if (providedCategoryId && ObjectId.isValid(providedCategoryId)) {
+    return new ObjectId(providedCategoryId);
+  }
+
+  if (!category) return null;
+
+  const trimmed = category.trim();
+  const categoriesCol = db.collection("categories");
+
+  // 2) Try matching by common field names, case-insensitive, against
+  // both the raw category string and a slugified version of it.
+  const slugified = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)+/g, "");
+
+  const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const match = await categoriesCol.findOne({
+    $or: [
+      { name: { $regex: `^${escapeRegex(trimmed)}$`, $options: "i" } },
+      { title: { $regex: `^${escapeRegex(trimmed)}$`, $options: "i" } },
+      { slug: slugified },
+    ],
+  });
+
+  return match ? match._id : null;
+}
+
+// POST: Add a new product — field names now match the storefront's Mongoose Product schema
 export async function POST(request: Request) {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
     const data = await request.json();
 
-    const { title, price, discountPrice, description, images, categoryId, stock, sizes, colors } = data;
+    const {
+      name,
+      description,
+      price,
+      originalPrice,
+      images,
+      category,
+      categoryId, // optional — admin form may or may not send this
+      brand,
+      stock,
+      isActive,
+      sku,
+      tags,
+      isFeatured,
+      isFlashSale,
+    } = data;
 
-    // Strict Validation
-    if (!title || !price || !images || images.length === 0) {
-      return NextResponse.json({ error: "Missing required fields (Title, Price, or Images)" }, { status: 400 });
+    // Strict Validation (matches storefront schema's required fields)
+    if (!name || !price || !images || images.length === 0 || !category) {
+      return NextResponse.json(
+        { error: "Missing required fields (Name, Price, Category, or Images)" },
+        { status: 400 }
+      );
     }
 
-    const slug = title
+    const slug = name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/(^-|-$)+/g, "");
 
-    const newProduct = {
-      title: title.trim(),
-      slug: slug,
-      price: parseFloat(price),
-      discountPrice: discountPrice ? parseFloat(discountPrice) : null,
+    const finalPrice = parseFloat(price);
+    const finalOriginalPrice = originalPrice ? parseFloat(originalPrice) : finalPrice;
+    const discount =
+      finalOriginalPrice > finalPrice
+        ? Math.round(((finalOriginalPrice - finalPrice) / finalOriginalPrice) * 100)
+        : 0;
+
+    const resolvedIsActive = isActive !== undefined ? isActive : true;
+
+    // Resolve the categoryId reference so storefront queries that filter
+    // by categoryId can actually find this product.
+    const resolvedCategoryId = await resolveCategoryId(db, category, categoryId);
+
+    const newProduct: Record<string, any> = {
+      name: name.trim(),
+      title: name.trim(), // storefront listing also reads `title` on some product docs
+      slug,
       description: description || "",
-      images: images, // Array of URLs
-      categoryId: categoryId ? new ObjectId(categoryId) : null,
+      price: finalPrice,
+      originalPrice: finalOriginalPrice,
+      discount,
+      images,
+      category: category.trim(),
+      brand: brand || "",
       stock: parseInt(stock) || 0,
-      sizes: sizes || [],
-      colors: colors || [],
+      sold: 0,
+      rating: 0,
+      reviewCount: 0,
+      tags: tags || [],
+      isActive: resolvedIsActive,
+      // storefront's product-listing filter relies on `status`, not just
+      // `isActive` — this was missing before and silently hid new products.
+      status: resolvedIsActive ? "ACTIVE" : "INACTIVE",
+      isFeatured: isFeatured || false,
+      isFlashSale: isFlashSale || false,
+      sku: sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
       createdAt: new Date(),
+      updatedAt: new Date(),
     };
+
+    if (resolvedCategoryId) {
+      newProduct.categoryId = resolvedCategoryId;
+    }
 
     const result = await db.collection("products").insertOne(newProduct);
 
-    return NextResponse.json({ id: result.insertedId, ...newProduct }, { status: 201 });
+    return NextResponse.json({ _id: result.insertedId, ...newProduct }, { status: 201 });
   } catch (error: any) {
     if (error.code === 11000) {
-      return NextResponse.json({ error: "Product slug already exists" }, { status: 400 });
+      return NextResponse.json({ error: "A product with this name already exists" }, { status: 400 });
     }
     return NextResponse.json({ error: "Failed to create product" }, { status: 500 });
   }
 }
 
-// DELETE: Remove a single product (?id=xxx) OR multiple products at once
-// Bulk delete is sent as a JSON body: { ids: ["id1", "id2", ...] }
+// DELETE: unchanged from before (single ?id=xxx or bulk { ids: [...] })
 export async function DELETE(request: Request) {
   try {
     const client = await clientPromise;
@@ -94,8 +159,6 @@ export async function DELETE(request: Request) {
     const { searchParams } = new URL(request.url);
     const singleId = searchParams.get("id");
 
-    // Try to read a JSON body for bulk delete. Single-delete calls from the
-    // existing frontend don't send a body, so this is allowed to fail silently.
     let bulkIds: string[] = [];
     try {
       const body = await request.json();
@@ -106,31 +169,23 @@ export async function DELETE(request: Request) {
       // no body sent — fine for the single ?id= case
     }
 
-    // --- Single delete ---
     if (singleId) {
       if (!ObjectId.isValid(singleId)) {
         return NextResponse.json({ error: "Invalid product ID" }, { status: 400 });
       }
-
       const result = await db.collection("products").deleteOne({ _id: new ObjectId(singleId) });
-
       if (result.deletedCount === 0) {
         return NextResponse.json({ error: "Product not found" }, { status: 404 });
       }
-
       return NextResponse.json({ success: true, deletedCount: 1 }, { status: 200 });
     }
 
-    // --- Bulk delete ---
     if (bulkIds.length > 0) {
       const validIds = bulkIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
-
       if (validIds.length === 0) {
         return NextResponse.json({ error: "No valid product IDs provided" }, { status: 400 });
       }
-
       const result = await db.collection("products").deleteMany({ _id: { $in: validIds } });
-
       return NextResponse.json({ success: true, deletedCount: result.deletedCount }, { status: 200 });
     }
 
@@ -140,8 +195,7 @@ export async function DELETE(request: Request) {
   }
 }
 
-// PATCH: Update a single product (?id=xxx, body = fields to set)
-// OR bulk-update many products at once (body = { ids: [...], updates: {...} })
+// PATCH: Update a single product (?id=xxx) OR bulk-update (body = { ids, updates })
 export async function PATCH(request: Request) {
   try {
     const client = await clientPromise;
@@ -151,13 +205,42 @@ export async function PATCH(request: Request) {
     const singleId = searchParams.get("id");
     const body = await request.json();
 
-    // --- Single update ---
     if (singleId) {
       if (!ObjectId.isValid(singleId)) {
         return NextResponse.json({ error: "Invalid product ID" }, { status: 400 });
       }
 
       const { _id, ...updateFields } = body;
+
+      // Recompute slug + discount if name/price fields changed, keeping data consistent
+      if (updateFields.name) {
+        updateFields.slug = updateFields.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/(^-|-$)+/g, "");
+        updateFields.title = updateFields.name;
+      }
+      if (updateFields.price && updateFields.originalPrice) {
+        const p = parseFloat(updateFields.price);
+        const op = parseFloat(updateFields.originalPrice);
+        updateFields.discount = op > p ? Math.round(((op - p) / op) * 100) : 0;
+      }
+
+      // Keep status and isActive in sync if either one is being updated,
+      // so partial edits (e.g. toggling just isActive) don't desync them again.
+      if (updateFields.isActive !== undefined && updateFields.status === undefined) {
+        updateFields.status = updateFields.isActive ? "ACTIVE" : "INACTIVE";
+      } else if (updateFields.status !== undefined && updateFields.isActive === undefined) {
+        updateFields.isActive = updateFields.status === "ACTIVE";
+      }
+
+      // Allow resolving categoryId if a plain category name was passed in an edit
+      if (updateFields.category && !updateFields.categoryId) {
+        const resolved = await resolveCategoryId(db, updateFields.category);
+        if (resolved) {
+          updateFields.categoryId = resolved;
+        }
+      }
 
       const result = await db.collection("products").findOneAndUpdate(
         { _id: new ObjectId(singleId) },
@@ -172,29 +255,34 @@ export async function PATCH(request: Request) {
       return NextResponse.json(result, { status: 200 });
     }
 
-    // --- Bulk update (e.g. bulk status change, bulk category change) ---
     const { ids, updates } = body;
 
     if (!Array.isArray(ids) || ids.length === 0 || !updates || typeof updates !== "object") {
-      return NextResponse.json(
-        { error: "ids[] and updates{} are required for bulk update" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "ids[] and updates{} are required for bulk update" }, { status: 400 });
     }
 
     const validIds = ids.filter((id: string) => ObjectId.isValid(id)).map((id: string) => new ObjectId(id));
-
     if (validIds.length === 0) {
       return NextResponse.json({ error: "No valid product IDs provided" }, { status: 400 });
     }
 
+    const bulkUpdates: Record<string, any> = { ...updates };
+    if (bulkUpdates.isActive !== undefined && bulkUpdates.status === undefined) {
+      bulkUpdates.status = bulkUpdates.isActive ? "ACTIVE" : "INACTIVE";
+    } else if (bulkUpdates.status !== undefined && bulkUpdates.isActive === undefined) {
+      bulkUpdates.isActive = bulkUpdates.status === "ACTIVE";
+    }
+
     const result = await db.collection("products").updateMany(
       { _id: { $in: validIds } },
-      { $set: { ...updates, updatedAt: new Date() } }
+      { $set: { ...bulkUpdates, updatedAt: new Date() } }
     );
 
     return NextResponse.json({ success: true, modifiedCount: result.modifiedCount }, { status: 200 });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === 11000) {
+      return NextResponse.json({ error: "Another product already uses this name/slug" }, { status: 400 });
+    }
     return NextResponse.json({ error: "Failed to update product(s)" }, { status: 500 });
   }
 }

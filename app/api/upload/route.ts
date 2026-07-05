@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 
-// POST: Accepts a base64 image (data URL) in the request body and uploads it to
-// Cloudinary using a server-side SIGNED upload (API secret never reaches the client).
-// Body: { image: "data:image/png;base64,....", folder?: "onecarta/categories" }
+// POST: Accepts a base64 file (data URL) and uploads it to Cloudinary using a
+// server-side SIGNED upload (API secret never reaches the client).
+// Body: { image: "data:image/png;base64,....", folder?: "onecarta/products", resourceType?: "image" | "video" }
 export async function POST(request: Request) {
   try {
-    const { image, folder } = await request.json();
+    const { image, folder, resourceType } = await request.json();
 
     if (!image) {
-      return NextResponse.json({ error: "No image provided" }, { status: 400 });
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
@@ -26,10 +26,10 @@ export async function POST(request: Request) {
       );
     }
 
+    const type = resourceType === "video" ? "video" : "image";
     const targetFolder = folder || "onecarta/general";
     const timestamp = Math.round(Date.now() / 1000);
 
-    // Cloudinary signature = sha1("folder=...&timestamp=..." + api_secret)
     const paramsToSign = `folder=${targetFolder}&timestamp=${timestamp}${apiSecret}`;
     const signature = crypto.createHash("sha1").update(paramsToSign).digest("hex");
 
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     formData.append("signature", signature);
     formData.append("folder", targetFolder);
 
-    const uploadRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+    const uploadRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${type}/upload`, {
       method: "POST",
       body: formData,
     });
@@ -53,6 +53,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ url: uploadData.secure_url }, { status: 200 });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to upload image" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to upload file" }, { status: 500 });
   }
 }

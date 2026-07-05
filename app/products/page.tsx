@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   Plus, Search, SlidersHorizontal, Eye, MoreVertical, 
   ShoppingCart, X, Save, Image as ImageIcon, 
@@ -14,18 +14,28 @@ import {
 interface Category {
   _id: string;
   name: string;
+  parentId?: string | null;
+}
+
+interface CategoryOption {
+  _id: string;
+  label: string; // name, indented with dashes based on nesting depth
 }
 
 interface Product {
   _id: string;
-  title: string;
+  name: string;
   price: number;
-  discountPrice: number | null;
+  originalPrice?: number | null;
+  category?: string;
+  categoryId?: string | null;
+  brand?: string;
   stock: number;
   slug: string;
   images?: string[];
   sku?: string;
   description?: string;
+  isActive?: boolean;
 }
 
 interface VariantOption {
@@ -57,6 +67,9 @@ export default function PremiumProductManager() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // Tracks which product is currently being edited (null = creating a new product)
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [qtySortOrder, setQtySortOrder] = useState<"asc" | "desc" | null>(null);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
@@ -75,7 +88,10 @@ export default function PremiumProductManager() {
   const [title, setTitle] = useState("");
   const [shortDesc, setShortDesc] = useState("");
   const [description, setDescription] = useState(""); 
-  const [imageUrl, setImageUrl] = useState("");
+  const [images, setImages] = useState<string[]>([]);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [price, setPrice] = useState("");
   const [discountPrice, setDiscountPrice] = useState("");
@@ -140,6 +156,47 @@ export default function PremiumProductManager() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  // Builds a flat, ordered, indented list of ALL categories (top-level +
+  // every nested subcategory) so the Category dropdown can show the full
+  // tree instead of only top-level categories. Each subcategory is placed
+  // directly under its parent with a "— " prefix per depth level.
+  const categoryOptions: CategoryOption[] = useMemo(() => {
+    const byParent: Record<string, Category[]> = {};
+    categories.forEach((cat) => {
+      const key = cat.parentId ? String(cat.parentId) : "root";
+      if (!byParent[key]) byParent[key] = [];
+      byParent[key].push(cat);
+    });
+
+    const result: CategoryOption[] = [];
+    const seen = new Set<string>();
+
+    const walk = (parentKey: string, depth: number) => {
+      const children = byParent[parentKey] || [];
+      children.forEach((cat) => {
+        if (seen.has(cat._id)) return; // safety: avoid infinite loop on bad data
+        seen.add(cat._id);
+        const prefix = depth > 0 ? "— ".repeat(depth) : "";
+        result.push({ _id: cat._id, label: `${prefix}${cat.name}` });
+        walk(cat._id, depth + 1);
+      });
+    };
+
+    walk("root", 0);
+
+    // Fallback: if some category's parentId points to something not present
+    // in the list (orphaned reference), still show it at the root level
+    // rather than silently dropping it from the dropdown.
+    categories.forEach((cat) => {
+      if (!seen.has(cat._id)) {
+        seen.add(cat._id);
+        result.push({ _id: cat._id, label: cat.name });
+      }
+    });
+
+    return result;
+  }, [categories]);
+
   // Rich Text Editor Command
   const handleEditorCommand = (command: string, value: string = "") => {
     document.execCommand(command, false, value);
@@ -149,15 +206,71 @@ export default function PremiumProductManager() {
   };
 
   // Image & Video URL Prompts
-  const promptImageUrl = () => {
-    const url = prompt("Enter Image URL Address:", imageUrl);
-    if (url !== null) setImageUrl(url.trim());
-  };
+  const readFileAsDataURL = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+};
 
-  const promptVideoUrl = () => {
+const uploadImageFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (fileArray.length === 0) return;
+
+    setIsUploadingImage(true);
+    try {
+      for (const file of fileArray) {
+        // Keep raw files under ~3MB — base64 encoding adds ~35% overhead,
+        // and serverless hosts (Vercel) cap request bodies around 4.5MB.
+        if (file.size > 3 * 1024 * 1024) {
+          setToast({ message: `${file.name} is too large (max 3MB)`, type: "error" });
+          continue;
+        }
+        const dataUrl = await readFileAsDataURL(file);
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: dataUrl, folder: "onecarta/products" }),
+        });
+        const data = await res.json();
+        if (res.ok && data.url) {
+          setImages((prev) => [...prev, data.url]);
+        } else {
+          setToast({ message: data.error || `Failed to upload ${file.name}`, type: "error" });
+        }
+      }
+    } catch (err) {
+      setToast({ message: "Image upload failed", type: "error" });
+    } finally {
+      setIsUploadingImage(false);
+    }
+};
+
+const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      uploadImageFiles(e.target.files);
+    }
+    e.target.value = "";
+};
+
+const handleImageDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      uploadImageFiles(e.dataTransfer.files);
+    }
+};
+
+const removeImage = (idx: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== idx));
+};
+
+const promptVideoUrl = () => {
     const url = prompt("Enter Video URL Link:", videoUrl);
     if (url !== null) setVideoUrl(url.trim());
-  };
+};
 
   // Variant Methods
   const addNewVariantCard = () => {
@@ -332,11 +445,14 @@ export default function PremiumProductManager() {
       const res = await fetch("/api/products", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids, updates: { status: newStatus } }),
+        body: JSON.stringify({ ids, updates: { isActive: newStatus === "ACTIVE" } }),
       });
 
       if (res.ok) {
         setToast({ message: `${ids.length} product(s) set to ${newStatus}`, type: "success" });
+        setProducts((prev) =>
+          prev.map((p) => (ids.includes(p._id) ? { ...p, isActive: newStatus === "ACTIVE" } : p))
+        );
         clearSelection();
       } else {
         const data = await res.json().catch(() => ({} as any));
@@ -347,13 +463,39 @@ export default function PremiumProductManager() {
     }
   };
 
+  // Resets every form field back to a blank "new product" state
+  const resetForm = () => {
+    setEditingId(null);
+    setTitle(""); setShortDesc(""); setDescription(""); setImages([]); setVideoUrl("");
+    setPrice(""); setDiscountPrice(""); setBuyingPrice(""); setProductSerial("0");
+    setSku(""); setUnitName(""); setStock(""); setWarranty(""); setInitialSold("0");
+    setCategoryId(""); setBrand(""); setWeight(""); setLength(""); setWidth(""); setHeight("");
+    setApplyDefaultShipping(true); setShippingDefaultCharge("0"); setShippingInsideDhaka("80"); setShippingOutsideDhaka("130");
+    setVariants([]); setSpecifications([]); setStatus("ACTIVE"); setCondition("New");
+    if (editorRef.current) editorRef.current.innerHTML = "";
+  };
+
+  // Loads an existing product's data into the form and switches to edit mode
   const handleEditProduct = (prod: Product) => {
-    setTitle(prod.title);
-    setPrice(prod.price.toString());
-    setDiscountPrice(prod.discountPrice ? prod.discountPrice.toString() : "");
-    setStock(prod.stock.toString());
+    setEditingId(prod._id);
+    setTitle(prod.name || "");
+    setDescription(prod.description || "");
+    if (editorRef.current) editorRef.current.innerHTML = prod.description || "";
+    setImages(prod.images || []);
+    setPrice(prod.price != null ? prod.price.toString() : "");
+    setDiscountPrice(prod.originalPrice != null ? prod.originalPrice.toString() : "");
+    setStock(prod.stock != null ? prod.stock.toString() : "");
     setSku(prod.sku || "");
-    setImageUrl(prod.images && prod.images[0] ? prod.images[0] : "");
+    setBrand(prod.brand || "");
+    // Prefer the stored categoryId reference when present (most reliable);
+    // fall back to matching by name for older products that predate it.
+    if (prod.categoryId) {
+      setCategoryId(String(prod.categoryId));
+    } else {
+      const matchedCategory = categories.find((c) => c.name === prod.category);
+      setCategoryId(matchedCategory ? matchedCategory._id : "");
+    }
+    setStatus(prod.isActive === false ? "DRAFT" : "ACTIVE");
     setView("add");
   };
 
@@ -363,7 +505,10 @@ export default function PremiumProductManager() {
       try {
         const [prodRes, catRes] = await Promise.all([
           fetch("/api/products"),
-          fetch("/api/categories")
+          // `all=true` returns every category AND subcategory as a flat list
+          // (not just top-level ones) so the dropdown below can show the
+          // full nested tree.
+          fetch("/api/categories?all=true")
         ]);
         const prodData = await prodRes.json();
         const catData = await catRes.json();
@@ -379,6 +524,7 @@ export default function PremiumProductManager() {
     loadData();
   }, []);
 
+  // Handles both create (POST) and edit (PATCH) submissions, based on editingId
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !price) return;
@@ -386,45 +532,59 @@ export default function PremiumProductManager() {
     setIsSubmitting(true);
     setError("");
 
+    const selectedCategory = categories.find((c) => c._id === categoryId);
+
+    const payload = {
+      name: title,
+      description: description || shortDesc,
+      price: Number(price),
+      originalPrice: discountPrice ? Number(discountPrice) : Number(price),
+      images: images,
+      category: selectedCategory ? selectedCategory.name : "",
+      // Send the actual ObjectId reference directly instead of relying on
+      // the backend to re-resolve it from the category name. This is what
+      // lets the storefront's categoryId-based filters actually find this
+      // product, and avoids ambiguity if two categories share a name.
+      categoryId: categoryId || undefined,
+      brand,
+      stock: Number(stock) || 0,
+      isActive: status === "ACTIVE",
+      sku: sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
+      shipping: {
+        applyDefault: applyDefaultShipping,
+        defaultCharge: Number(shippingDefaultCharge),
+        insideDhaka: Number(shippingInsideDhaka),
+        outsideDhaka: Number(shippingOutsideDhaka)
+      },
+      variants,
+      specifications
+    };
+
     try {
-      const res = await fetch("/api/products", {
-        method: "POST",
+      const url = editingId ? `/api/products?id=${editingId}` : "/api/products";
+      const method = editingId ? "PATCH" : "POST";
+
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          price: Number(price),
-          discountPrice: discountPrice ? Number(discountPrice) : null,
-          description: description || shortDesc,
-          stock: Number(stock) || 0,
-          categoryId,
-          images: imageUrl ? [imageUrl.trim()] : [],
-          sku: sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
-          shipping: {
-            applyDefault: applyDefaultShipping,
-            defaultCharge: Number(shippingDefaultCharge),
-            insideDhaka: Number(shippingInsideDhaka),
-            outsideDhaka: Number(shippingOutsideDhaka)
-          },
-          variants,
-          specifications
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
 
       if (res.ok) {
-        setProducts([data, ...products]);
-        setTitle(""); setShortDesc(""); setDescription(""); setImageUrl(""); setVideoUrl("");
-        setPrice(""); setDiscountPrice(""); setBuyingPrice(""); setProductSerial("0");
-        setSku(""); setUnitName(""); setStock(""); setWarranty(""); setInitialSold("0");
-        setCategoryId(""); setBrand(""); setWeight(""); setLength(""); setWidth(""); setHeight("");
-        setApplyDefaultShipping(true); setShippingDefaultCharge("0"); setShippingInsideDhaka("80"); setShippingOutsideDhaka("130");
-        setVariants([]); setSpecifications([]);
+        if (editingId) {
+          setProducts((prev) => prev.map((p) => (p._id === editingId ? { ...p, ...data } : p)));
+          setToast({ message: "Product updated", type: "success" });
+        } else {
+          setProducts([data, ...products]);
+          setToast({ message: "Product created", type: "success" });
+        }
+        resetForm();
         setView("list");
-        setToast({ message: "Product created", type: "success" });
       } else {
-        setError(data.error || "Failed to upload product");
-        setToast({ message: data.error || "Failed to upload product", type: "error" });
+        setError(data.error || "Failed to save product");
+        setToast({ message: data.error || "Failed to save product", type: "error" });
       }
     } catch (err) {
       setError("An operational server error occurred");
@@ -455,7 +615,7 @@ export default function PremiumProductManager() {
             </div>
             <div className="flex items-center gap-3">
               <button type="button" className="p-2.5 bg-white border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-50 shadow-2xs"><Search size={18} /></button>
-              <button type="button" onClick={() => setView("add")} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer"><Plus size={18} /> Add Product</button>
+              <button type="button" onClick={() => { resetForm(); setView("add"); }} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer"><Plus size={18} /> Add Product</button>
             </div>
           </div>
 
@@ -570,7 +730,7 @@ export default function PremiumProductManager() {
                           {prod.images && prod.images[0] ? <img src={prod.images[0]} alt="" className="w-full h-full object-cover" /> : <ImageIcon size={20} className="text-gray-300" />}
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900 text-sm block group-hover:text-indigo-600 transition-colors">{prod.title}</span>
+                          <span className="font-semibold text-gray-900 text-sm block group-hover:text-indigo-600 transition-colors">{prod.name}</span>
                           <a 
                             href={`/products/${prod.slug}`} 
                             target="_blank" 
@@ -581,6 +741,11 @@ export default function PremiumProductManager() {
                           >
                             <ExternalLink size={14} />
                           </a>
+                          {prod.isActive === false && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md">
+                              Draft
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="p-4 text-gray-400 font-medium">Own</td>
@@ -629,9 +794,11 @@ export default function PremiumProductManager() {
                               <button 
                                 type="button"
                                 onClick={() => {
-                                  setTitle(`${prod.title} (Clone)`);
+                                  resetForm();
+                                  setTitle(`${prod.name} (Clone)`);
                                   setPrice(prod.price.toString());
                                   setStock(prod.stock.toString());
+                                  setImages(prod.images || []);   // <-- add this line
                                   setView("add");
                                 }}
                                 className="w-full px-3.5 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 cursor-pointer"
@@ -713,14 +880,14 @@ export default function PremiumProductManager() {
         </div>
       )}
 
-      {/* ==================== VIEW 2: ADD PRODUCT VIEW ==================== */}
+      {/* ==================== VIEW 2: ADD / EDIT PRODUCT VIEW ==================== */}
       {view === "add" && (
         <form onSubmit={handleCreateProduct} className="space-y-5 max-w-7xl mx-auto">
           
           <div className="flex items-center justify-between border-b border-gray-100 pb-3 bg-[#f8f9fa] sticky top-0 z-10">
-            <h1 className="text-xl font-semibold text-gray-900 tracking-tight">Add Product</h1>
+            <h1 className="text-xl font-semibold text-gray-900 tracking-tight">{editingId ? "Edit Product" : "Add Product"}</h1>
             <div className="flex items-center gap-3">
-              <button type="button" onClick={() => setView("list")} className="px-4 py-2 bg-white border border-gray-200 text-gray-600 hover:bg-red-50 hover:text-red-600 text-sm font-medium rounded-xl flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"><X size={16} /> Discard</button>
+              <button type="button" onClick={() => { resetForm(); setView("list"); }} className="px-4 py-2 bg-white border border-gray-200 text-gray-600 hover:bg-red-50 hover:text-red-600 text-sm font-medium rounded-xl flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"><X size={16} /> Discard</button>
               <button type="submit" disabled={isSubmitting} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm transition-all disabled:opacity-50">{isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <><Save size={16} /> Save</>}</button>
             </div>
           </div>
@@ -749,7 +916,7 @@ export default function PremiumProductManager() {
                     <div>
                       <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Short Description (SEO & Data Feed)</label>
                       <textarea rows={2} value={shortDesc} onChange={(e) => setShortDesc(e.target.value)} placeholder="Short Description" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 bg-white resize-none" />
-                      <span className="text-xs text-gray-400 block text-right font-mono mt-1">0/255</span>
+                      <span className="text-xs text-gray-400 block text-right font-mono mt-1">{shortDesc.length}/255</span>
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Product Description</label>
@@ -790,35 +957,75 @@ export default function PremiumProductManager() {
               </div>
 
               {/* 2. Media */}
-              <div className="bg-white border border-gray-100 rounded-xl shadow-2xs overflow-hidden">
-                <div 
-                  onClick={() => toggleSection("media")}
-                  className="p-4.5 flex items-center justify-between border-b border-gray-50 bg-white cursor-pointer select-none group"
-                >
-                  <h3 className="text-[15px] font-semibold text-gray-800 group-hover:text-indigo-600 transition-colors">Media</h3>
-                  <span className="text-gray-400 group-hover:text-gray-600 transition-colors">
-                    {openSections.media ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-                  </span>
-                </div>
-
-                {openSections.media && (
-                  <div className="p-6 space-y-5 bg-white animate-slideDown">
-                    <div className="border-2 border-dashed border-gray-200 hover:border-[#7c3aed] bg-white hover:bg-[#fbfbfe] rounded-3xl p-8 text-center flex flex-col items-center justify-center gap-2.5 transition-all duration-300 min-h-36 group/img">
-                      <div className="text-gray-400 group-hover/img:text-[#7c3aed] transition-colors duration-300"><ImageIcon size={28} strokeWidth={1.5} /></div>
-                      <p className="text-sm font-medium text-gray-400 max-w-xl leading-relaxed group-hover/img:text-gray-500 transition-colors duration-300">Drag and drop image here, or click add image. Supported formats: JPG, PNG, Max size: 4MB.</p>
-                      <button type="button" onClick={promptImageUrl} className="mt-1 px-4 py-1.5 bg-[#f3f0ff] hover:bg-[#e4defc] text-[#7c3aed] font-bold text-xs rounded-xl transition-colors cursor-pointer shadow-3xs">Add Image</button>
-                      {imageUrl && <p className="text-xs font-mono text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-md mt-1 truncate max-w-md">✓ {imageUrl}</p>}
-                    </div>
-
-                    <div className="border border-dashed border-gray-200 hover:border-[#7c3aed] bg-white hover:bg-[#fbfbfe] rounded-2xl p-5 text-center flex flex-col items-center justify-center gap-2.5 transition-all duration-300 min-h-32 group/vid">
-                      <div className="text-gray-400 group-hover/vid:text-[#7c3aed] transition-colors duration-300"><Video size={26} strokeWidth={1.5} /></div>
-                      <p className="text-xs font-medium text-gray-400 tracking-tight group-hover/vid:text-gray-500 transition-colors duration-300">Paste the video link here</p>
-                      <button type="button" onClick={promptVideoUrl} className="px-4 py-1.5 bg-[#f3f0ff] hover:bg-[#e4defc] text-[#7c3aed] font-medium text-xs rounded-xl transition-colors cursor-pointer shadow-3xs">Add Link</button>
-                      {videoUrl && <p className="text-xs font-mono text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-md mt-1 truncate max-w-md">✓ {videoUrl}</p>}
-                    </div>
+              {openSections.media && (
+                <div className="p-6 space-y-5 bg-white animate-slideDown">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileInputChange}
+                  />
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                    onDragLeave={() => setIsDraggingOver(false)}
+                    onDrop={handleImageDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-3xl p-8 text-center flex flex-col items-center justify-center gap-2.5 transition-all duration-300 min-h-36 cursor-pointer group/img ${
+                      isDraggingOver ? "border-[#7c3aed] bg-[#fbfbfe]" : "border-gray-200 hover:border-[#7c3aed] bg-white hover:bg-[#fbfbfe]"
+                    }`}
+                  >
+                    {isUploadingImage ? (
+                      <>
+                        <Loader2 size={28} className="animate-spin text-[#7c3aed]" />
+                        <p className="text-sm font-medium text-gray-500">Uploading...</p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-gray-400 group-hover/img:text-[#7c3aed] transition-colors duration-300"><ImageIcon size={28} strokeWidth={1.5} /></div>
+                        <p className="text-sm font-medium text-gray-400 max-w-xl leading-relaxed group-hover/img:text-gray-500 transition-colors duration-300">Drag and drop images here, or click to browse. JPG, PNG — max 3MB each.</p>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }} className="mt-1 px-4 py-1.5 bg-[#f3f0ff] hover:bg-[#e4defc] text-[#7c3aed] font-bold text-xs rounded-xl transition-colors cursor-pointer shadow-3xs">Browse Files</button>
+                      </>
+                    )}
                   </div>
-                )}
-              </div>
+
+                  {images.length > 0 && (
+                    <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
+                      {images.map((url, idx) => (
+                        <div key={idx} className="relative group/thumb aspect-square border border-gray-200 rounded-xl overflow-hidden bg-gray-50">
+                          <img src={url} alt="" className="w-full h-full object-cover" />
+                          {idx === 0 && (
+                            <span className="absolute top-1 left-1 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md">MAIN</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => removeImage(idx)}
+                            className="absolute top-1 right-1 w-5 h-5 bg-black/60 hover:bg-red-600 text-white rounded-full flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="border border-dashed border-gray-200 hover:border-[#7c3aed] bg-white hover:bg-[#fbfbfe] rounded-2xl p-5 space-y-3 transition-all duration-300 group/vid">
+                    <div className="flex flex-col items-center justify-center gap-2 text-center">
+                      <div className="text-gray-400 group-hover/vid:text-[#7c3aed] transition-colors duration-300"><Video size={26} strokeWidth={1.5} /></div>
+                      <p className="text-xs font-medium text-gray-400 tracking-tight">Paste a video link (YouTube, Vimeo, or direct MP4 URL)</p>
+                    </div>
+                    <input
+                      type="text"
+                      value={videoUrl}
+                      onChange={(e) => setVideoUrl(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm font-medium bg-white text-gray-800 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600"
+                    />
+                    {videoUrl && <p className="text-xs font-mono text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-md truncate">✓ {videoUrl}</p>}
+                  </div>
+                </div>
+              )}
 
               {/* 3. Pricing */}
               <div className="bg-white border border-gray-100 rounded-xl shadow-2xs overflow-hidden">
@@ -1048,9 +1255,13 @@ export default function PremiumProductManager() {
                   <div className="p-4.5 space-y-3.5 bg-white animate-slideDown">
                     <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-xs font-semibold bg-white text-gray-700 focus:ring-2 focus:ring-indigo-100">
                       <option value="">Select Category</option>
-                      {categories.map((cat) => <option key={cat._id} value={cat._id}>{cat.name}</option>)}
+                      {categoryOptions.map((opt) => <option key={opt._id} value={opt._id}>{opt.label}</option>)}
                     </select>
-                    <button type="button" className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium uppercase tracking-wider transition-colors shadow-sm">Assign category</button>
+                    {categoryOptions.length === 0 && (
+                      <p className="text-[11px] text-gray-400 font-medium">
+                        No categories found. Add one from the Categories page first.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
