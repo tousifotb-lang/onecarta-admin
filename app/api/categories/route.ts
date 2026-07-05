@@ -63,7 +63,7 @@ export async function POST(request: Request) {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
-    const { name, shortDescription, bannerImage, image, parentId } = await request.json();
+    const { name, shortDescription, bannerImage, image, icon, parentId } = await request.json();
 
     if (!name || !name.trim()) {
       return NextResponse.json({ error: "Category name is required" }, { status: 400 });
@@ -80,8 +80,9 @@ export async function POST(request: Request) {
       shortDescription: shortDescription || "",
       bannerImage: bannerImage || null,
       image: image || null,
+      icon: icon || "",
       parentId: parentId ? new ObjectId(parentId) : null,
-      order: Date.now(), // simple default ordering; drag-reorder can overwrite this later
+      order: Date.now(),
       createdAt: new Date(),
     };
 

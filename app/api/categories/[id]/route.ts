@@ -54,7 +54,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     const client = await clientPromise;
     const db = client.db("onecarta");
-    const { name, shortDescription, bannerImage, image } = await request.json();
+    const { name, shortDescription, bannerImage, image, icon } = await request.json();
 
     const updateFields: any = { updatedAt: new Date() };
     if (name !== undefined) {
@@ -67,6 +67,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (shortDescription !== undefined) updateFields.shortDescription = shortDescription;
     if (bannerImage !== undefined) updateFields.bannerImage = bannerImage;
     if (image !== undefined) updateFields.image = image;
+    if (icon !== undefined) updateFields.icon = icon;
 
     await db.collection("categories").updateOne({ _id: new ObjectId(id) }, { $set: updateFields });
 

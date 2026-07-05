@@ -13,6 +13,7 @@ interface CategoryNode {
   slug: string;
   image: string | null;
   bannerImage: string | null;
+  icon?: string;
   shortDescription: string;
   parentId: string | null;
   subCategoryCount: number;
@@ -44,6 +45,8 @@ export default function CategoryManagerMatrix() {
   const [modalImagePreview, setModalImagePreview]   = useState<string | null>(null);
   const [modalBannerFile, setModalBannerFile] = useState<string | null>(null);
   const [modalImageFile, setModalImageFile]   = useState<string | null>(null);
+  const [modalIcon, setModalIcon] = useState("");
+  const [panelIcon, setPanelIcon] = useState("");
 
   // Left panel state
   const [panelBannerPreview, setPanelBannerPreview] = useState<string | null>(null);
@@ -83,6 +86,7 @@ export default function CategoryManagerMatrix() {
         setPanelDescription(data.category.shortDescription || "");
         setPanelBannerPreview(data.category.bannerImage || null);
         setPanelImagePreview(data.category.image || null);
+        setPanelIcon(data.category.icon || "");
         setCurrentList(data.subCategories);
       }
     } catch (err) {
@@ -148,6 +152,7 @@ export default function CategoryManagerMatrix() {
     setModalCategoryName(""); setModalDescription(""); setActiveEditId(null);
     setModalBannerPreview(null); setModalImagePreview(null);
     setModalBannerFile(null); setModalImageFile(null); setModalError("");
+    setModalIcon("");
   };
 
   const handleOpenCreateModal = () => { resetModalState(); setModalMode("create"); setShowProductModal(true); };
@@ -157,6 +162,7 @@ export default function CategoryManagerMatrix() {
     setModalCategoryName(node.name); setModalDescription(node.shortDescription || "");
     setModalBannerPreview(node.bannerImage || null); setModalImagePreview(node.image || null);
     setModalBannerFile(null); setModalImageFile(null); setModalError("");
+    setModalIcon(node.icon || "");
     setShowProductModal(true);
   };
 
@@ -171,13 +177,19 @@ export default function CategoryManagerMatrix() {
       if (modalMode === "create") {
         const res = await fetch("/api/categories", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: modalCategoryName, shortDescription: modalDescription,
-            bannerImage: bannerUrl, image: imageUrl, parentId: currentParent ? currentParent._id : null }),
+          body: JSON.stringify({
+            name: modalCategoryName,
+            shortDescription: modalDescription,
+            bannerImage: bannerUrl,
+            image: imageUrl,
+            icon: modalIcon,
+            parentId: currentParent ? currentParent._id : null,
+          }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to create category");
       } else if (modalMode === "edit" && activeEditId) {
-        const payload: any = { name: modalCategoryName, shortDescription: modalDescription };
+        const payload: any = { name: modalCategoryName, shortDescription: modalDescription, icon: modalIcon };
         if (bannerUrl) payload.bannerImage = bannerUrl;
         if (imageUrl) payload.image = imageUrl;
         const res = await fetch(`/api/categories/${activeEditId}`, {
@@ -192,7 +204,9 @@ export default function CategoryManagerMatrix() {
       resetModalState(); setShowProductModal(false);
     } catch (err: any) {
       setModalError(err.message || "Something went wrong");
-    } finally { setIsSubmitting(false); }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDeleteNode = async (id: string) => {
@@ -221,7 +235,7 @@ export default function CategoryManagerMatrix() {
       const [bannerUrl, imageUrl] = await Promise.all([
         uploadImageIfNeeded(panelBannerFile), uploadImageIfNeeded(panelImageFile),
       ]);
-      const payload: any = { name: panelName, shortDescription: panelDescription };
+      const payload: any = { name: panelName, shortDescription: panelDescription, icon: panelIcon };
       if (bannerUrl) payload.bannerImage = bannerUrl;
       if (imageUrl) payload.image = imageUrl;
       const res = await fetch(`/api/categories/${currentParent._id}`, {
@@ -375,6 +389,8 @@ export default function CategoryManagerMatrix() {
                             <div className="w-11 h-11 bg-gray-50 border border-gray-100 rounded-xl flex items-center justify-center text-gray-400 shrink-0 overflow-hidden">
                               {node.image
                                 ? <img src={node.image} alt={node.name} className="w-full h-full object-cover" />
+                                : node.icon
+                                ? <span className="text-xl">{node.icon}</span>
                                 : <ImageIcon size={18} />}
                             </div>
                             <div>
@@ -432,6 +448,23 @@ export default function CategoryManagerMatrix() {
                 {panelError}
               </div>
             )}
+
+            {/* Icon (emoji) */}
+            <div>
+              <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">
+                Icon (Emoji)
+              </label>
+              <input
+                type="text"
+                value={panelIcon}
+                onChange={(e) => setPanelIcon(e.target.value.slice(0, 4))}
+                placeholder="e.g. 💻 📱 👗"
+                className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-lg text-center bg-white outline-none focus:border-indigo-500 transition-colors"
+              />
+              <p className="text-[10px] text-gray-400 mt-1.5">
+                Shown on storefront homepage & category page when no image is uploaded.
+              </p>
+            </div>
 
             {/* Banner */}
             <div>
@@ -534,6 +567,8 @@ export default function CategoryManagerMatrix() {
                             <div className="w-10 h-10 bg-gray-50 border border-gray-100 rounded-xl flex items-center justify-center text-gray-400 shrink-0 overflow-hidden">
                               {subNode.image
                                 ? <img src={subNode.image} alt={subNode.name} className="w-full h-full object-cover" />
+                                : subNode.icon
+                                ? <span className="text-lg">{subNode.icon}</span>
                                 : <ImageIcon size={16} />}
                             </div>
                             <span
@@ -619,6 +654,23 @@ export default function CategoryManagerMatrix() {
             )}
 
             <form onSubmit={handleSaveCategory} className="space-y-4 mt-4">
+              {/* Icon (emoji) */}
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">
+                  Icon (Emoji)
+                </label>
+                <input
+                  type="text"
+                  value={modalIcon}
+                  onChange={(e) => setModalIcon(e.target.value.slice(0, 4))}
+                  placeholder="e.g. 💻 📱 👗"
+                  className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-lg text-center bg-white outline-none focus:border-indigo-500 transition-colors"
+                />
+                <p className="text-[10px] text-gray-400 mt-1.5">
+                  Shown on storefront homepage & category page when no image is uploaded.
+                </p>
+              </div>
+
               {/* Banner upload */}
               <div>
                 <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Banner / Cover</label>
