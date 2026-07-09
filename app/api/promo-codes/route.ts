@@ -22,9 +22,9 @@ export async function POST(request: Request) {
     const db = client.db("onecarta");
     const {
       codeName,
-      amount,
-      percentage,
-      hasMaxDiscount,
+      discountType, // "flat" | "upto"
+      flatAmount,
+      basePercentage,
       maxDiscountValue,
       hasMinPurchase,
       minPurchaseValue,
@@ -35,6 +35,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Code name is required" }, { status: 400 });
     }
 
+    if (discountType !== "flat" && discountType !== "upto") {
+      return NextResponse.json({ error: "Discount type must be 'flat' or 'upto'" }, { status: 400 });
+    }
+
     const normalizedCode = codeName.trim().toUpperCase();
 
     const existing = await db.collection("promocodes").findOne({ codeName: normalizedCode });
@@ -42,16 +46,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A promo code with this name already exists" }, { status: 400 });
     }
 
+    // ---- discountType-specific validation ----
+    if (discountType === "flat") {
+      if (!flatAmount || Number(flatAmount) <= 0) {
+        return NextResponse.json({ error: "Flat discount amount is required" }, { status: 400 });
+      }
+      if (hasMinPurchase && (!minPurchaseValue || Number(minPurchaseValue) <= 0)) {
+        return NextResponse.json({ error: "Minimum purchase value is required" }, { status: 400 });
+      }
+    } else {
+      // upto — min purchase, base%, max discount shobgula mandatory
+      if (!minPurchaseValue || Number(minPurchaseValue) <= 0) {
+        return NextResponse.json({ error: "Minimum purchase value is required for 'upto' discounts" }, { status: 400 });
+      }
+      if (!basePercentage || Number(basePercentage) <= 0) {
+        return NextResponse.json({ error: "Base percentage is required for 'upto' discounts" }, { status: 400 });
+      }
+      if (!maxDiscountValue || Number(maxDiscountValue) <= 0) {
+        return NextResponse.json({ error: "Max discount value is required for 'upto' discounts" }, { status: 400 });
+      }
+    }
+
     const newPromo = {
       codeName: normalizedCode,
-      amount: amount || "",
-      percentage: percentage || "",
-      hasMaxDiscount: !!hasMaxDiscount,
-      maxDiscountValue: hasMaxDiscount ? maxDiscountValue || "" : "",
-      hasMinPurchase: !!hasMinPurchase,
-      minPurchaseValue: hasMinPurchase ? minPurchaseValue || "" : "",
+      discountType,
+      flatAmount: discountType === "flat" ? flatAmount || "" : "",
+      basePercentage: discountType === "upto" ? basePercentage || "" : "",
+      maxDiscountValue: discountType === "upto" ? maxDiscountValue || "" : "",
+      hasMinPurchase: discountType === "upto" ? true : !!hasMinPurchase,
+      minPurchaseValue:
+        discountType === "upto" ? minPurchaseValue || "" : hasMinPurchase ? minPurchaseValue || "" : "",
       expiryDate: expiryDate || "",
-      isActive: true, // reserved for future checkout validation (expired/disabled codes)
+      isActive: true,
       createdAt: new Date(),
     };
 

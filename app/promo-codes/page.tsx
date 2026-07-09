@@ -2,15 +2,15 @@
 
 import React, { useState, useEffect } from "react";
 import {
-  Plus, X, Calendar, Edit3, Trash2, Ticket, FileText, ChevronLeft, ChevronRight, Loader2
+  Plus, X, Edit3, Trash2, ChevronLeft, ChevronRight, Loader2
 } from "lucide-react";
 
 interface PromoCode {
   _id: string;
   codeName: string;
-  amount: string;
-  percentage: string;
-  hasMaxDiscount: boolean;
+  discountType: "flat" | "upto";
+  flatAmount: string;
+  basePercentage: string;
   maxDiscountValue: string;
   hasMinPurchase: boolean;
   minPurchaseValue: string;
@@ -38,9 +38,9 @@ export default function PromoCodeManagerMatrix() {
 
   // Form Field Interactive Input Buffers
   const [codeName, setCodeName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [percentage, setPercentage] = useState("");
-  const [hasMaxDiscount, setHasMaxDiscount] = useState(false);
+  const [discountType, setDiscountType] = useState<"flat" | "upto">("flat");
+  const [flatAmount, setFlatAmount] = useState("");
+  const [basePercentage, setBasePercentage] = useState("");
   const [maxDiscountValue, setMaxDiscountValue] = useState("");
   const [hasMinPurchase, setHasMinPurchase] = useState(false);
   const [minPurchaseValue, setMinPurchaseValue] = useState("");
@@ -62,18 +62,22 @@ export default function PromoCodeManagerMatrix() {
     loadPromoCodes();
   }, []);
 
-  const handleOpenCreateModal = () => {
-    setModalMode("create");
-    setActiveId(null);
+  const resetForm = () => {
     setCodeName("");
-    setAmount("");
-    setPercentage("");
-    setHasMaxDiscount(false);
+    setDiscountType("flat");
+    setFlatAmount("");
+    setBasePercentage("");
     setMaxDiscountValue("");
     setHasMinPurchase(false);
     setMinPurchaseValue("");
     setExpiryDate("");
     setModalError("");
+  };
+
+  const handleOpenCreateModal = () => {
+    setModalMode("create");
+    setActiveId(null);
+    resetForm();
     setShowModal(true);
   };
 
@@ -81,15 +85,26 @@ export default function PromoCodeManagerMatrix() {
     setModalMode("edit");
     setActiveId(item._id);
     setCodeName(item.codeName);
-    setAmount(item.amount);
-    setPercentage(item.percentage);
-    setHasMaxDiscount(item.hasMaxDiscount);
-    setMaxDiscountValue(item.maxDiscountValue);
+    setDiscountType(item.discountType || "flat");
+    setFlatAmount(item.flatAmount || "");
+    setBasePercentage(item.basePercentage || "");
+    setMaxDiscountValue(item.maxDiscountValue || "");
     setHasMinPurchase(item.hasMinPurchase);
-    setMinPurchaseValue(item.minPurchaseValue);
-    setExpiryDate(item.expiryDate);
+    setMinPurchaseValue(item.minPurchaseValue || "");
+    setExpiryDate(item.expiryDate || "");
     setModalError("");
     setShowModal(true);
+  };
+
+  // Discount type switch korle irrelevant field gula clear kore dei, jate stale data payload e na jay
+  const handleDiscountTypeChange = (type: "flat" | "upto") => {
+    setDiscountType(type);
+    if (type === "flat") {
+      setBasePercentage("");
+      setMaxDiscountValue("");
+    } else {
+      setHasMinPurchase(true); // upto te min purchase always mandatory
+    }
   };
 
   const handleSavePromoCode = async (e: React.FormEvent) => {
@@ -101,9 +116,9 @@ export default function PromoCodeManagerMatrix() {
 
     const payload = {
       codeName,
-      amount,
-      percentage,
-      hasMaxDiscount,
+      discountType,
+      flatAmount,
+      basePercentage,
       maxDiscountValue,
       hasMinPurchase,
       minPurchaseValue,
@@ -214,10 +229,12 @@ export default function PromoCodeManagerMatrix() {
                   {/* Top Green Elements Container */}
                   <div className="bg-[#42aa77] text-white p-4.5 space-y-4 relative flex-1 flex flex-col justify-between">
                     <div className="flex items-start justify-between">
-                      <div className="text-base font-bold tracking-tight">
-                        {promo.percentage ? `${promo.percentage} % Off` : `${promo.amount} BDT Off`} •
+                      <div className="text-base font-bold tracking-tight leading-tight">
+                        {promo.discountType === "flat"
+                          ? `৳${promo.flatAmount} Flat Off`
+                          : `Upto ${promo.basePercentage}% Off`}
                       </div>
-                      <div className="flex items-center gap-1 bg-black/10 rounded-lg p-0.5">
+                      <div className="flex items-center gap-1 bg-black/10 rounded-lg p-0.5 shrink-0">
                         <button type="button" onClick={() => handleOpenEditModal(promo)} className="p-1 text-white/90 hover:text-white hover:bg-white/10 rounded-md transition-all cursor-pointer"><Edit3 size={13} /></button>
                         <button type="button" onClick={() => handleRequestDelete(promo._id)} className="p-1 text-white/90 hover:text-red-200 hover:bg-white/10 rounded-md transition-all cursor-pointer"><Trash2 size={13} /></button>
                       </div>
@@ -226,11 +243,17 @@ export default function PromoCodeManagerMatrix() {
                     <div className="space-y-2 text-[11px] font-bold text-emerald-50/90 tracking-wide">
                       <div className="flex flex-col">
                         <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Min Purchase</span>
-                        <span className="text-xs font-semibold text-white mt-0.5">৳ {promo.minPurchaseValue || "0"}</span>
+                        <span className="text-xs font-semibold text-white mt-0.5">
+                          ৳ {promo.minPurchaseValue || "0"}
+                        </span>
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Max Discount</span>
-                        <span className="text-xs font-semibold text-white mt-0.5">৳ {promo.maxDiscountValue || "—"}</span>
+                        <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">
+                          {promo.discountType === "flat" ? "Flat Amount" : "Max Discount"}
+                        </span>
+                        <span className="text-xs font-semibold text-white mt-0.5">
+                          ৳ {promo.discountType === "flat" ? promo.flatAmount || "0" : promo.maxDiscountValue || "0"}
+                        </span>
                       </div>
                     </div>
 
@@ -244,7 +267,7 @@ export default function PromoCodeManagerMatrix() {
                     <div className="absolute -right-2.5 -bottom-2.5 w-5 h-5 rounded-full bg-[#f8f9fa] border-l border-gray-200"></div>
                   </div>
 
-                  {/* Bottom White Elements Container with stylized zigzag line */}
+                  {/* Bottom White Elements Container */}
                   <div className="bg-white p-4.5 text-center relative pt-6 border-t border-dashed border-gray-200">
                     <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest block">Promo Code</span>
                     <span className="text-sm font-black text-gray-900 tracking-wider block mt-1 font-mono">{promo.codeName}</span>
@@ -299,71 +322,86 @@ export default function PromoCodeManagerMatrix() {
                 <p className="text-[10px] text-gray-400 font-medium mt-1.5">Enter a unique promo code. This will help you identify it later.</p>
               </div>
 
+              {/* Discount Type Selector */}
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Discount Type (Amount/Percentage)</label>
-                <div className="grid grid-cols-1 sm:grid-cols-7 gap-3 items-center">
-                  <div className="sm:col-span-3">
-                    <input
-                      type="number"
-                      placeholder="Amount"
-                      value={amount}
-                      disabled={!!percentage}
-                      onChange={(e) => setAmount(e.target.value)}
-                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white disabled:bg-gray-50 text-gray-700 outline-none focus:border-indigo-500 font-mono"
-                    />
-                  </div>
-                  <div className="sm:col-span-1 text-center text-xs font-bold text-gray-400 uppercase select-none">Or</div>
-                  <div className="sm:col-span-3">
-                    <input
-                      type="number"
-                      placeholder="Percentage"
-                      value={percentage}
-                      disabled={!!amount}
-                      onChange={(e) => setPercentage(e.target.value)}
-                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white disabled:bg-gray-50 text-gray-700 outline-none focus:border-indigo-500 font-mono"
-                    />
-                  </div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Discount Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleDiscountTypeChange("flat")}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                      discountType === "flat"
+                        ? "bg-indigo-600 border-indigo-600 text-white"
+                        : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    Flat Discount
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscountTypeChange("upto")}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                      discountType === "upto"
+                        ? "bg-indigo-600 border-indigo-600 text-white"
+                        : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    Upto Discount
+                  </button>
                 </div>
+                <p className="text-[10px] text-gray-400 font-medium mt-1.5">
+                  {discountType === "flat"
+                    ? "Customer will get the full flat amount off once minimum purchase (if set) is met."
+                    : "Discount scales up with order value — starts at base % on max discount, and grows as the order gets bigger, capped at max discount."}
+                </p>
               </div>
 
-              {/* Dynamic Toggle Switch Rows */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-1">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-gray-700">Max Discount</span>
-                      <span className="w-3.5 h-3.5 rounded-full border border-gray-300 text-gray-400 flex items-center justify-center text-[9px] font-black cursor-help" title="Apply the highest available discount on eligible purchases.">?</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setHasMaxDiscount(!hasMaxDiscount)}
-                      className={`w-8 h-4.5 rounded-full relative transition-colors duration-200 cursor-pointer ${
-                        hasMaxDiscount ? "bg-indigo-600" : "bg-slate-300"
-                      }`}
-                    >
-                      <span className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-3xs transition-all duration-200 ${
-                        hasMaxDiscount ? "right-0.5" : "left-0.5"
-                      }`} />
-                    </button>
+              {discountType === "flat" ? (
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Flat Discount Amount (৳) <span className="text-red-500">*</span></label>
+                  <input
+                    type="number"
+                    required
+                    value={flatAmount}
+                    onChange={(e) => setFlatAmount(e.target.value)}
+                    placeholder="e.g. 500"
+                    className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Base Percentage (%) <span className="text-red-500">*</span></label>
+                    <input
+                      type="number"
+                      required
+                      value={basePercentage}
+                      onChange={(e) => setBasePercentage(e.target.value)}
+                      placeholder="e.g. 20"
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
+                    />
                   </div>
-                  {hasMaxDiscount && (
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Max Discount (৳) <span className="text-red-500">*</span></label>
                     <input
                       type="number"
                       required
                       value={maxDiscountValue}
                       onChange={(e) => setMaxDiscountValue(e.target.value)}
-                      placeholder="Maximum discount value (৳)"
-                      className="w-full px-3.5 py-2 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono animate-slideDown"
+                      placeholder="e.g. 500"
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
                     />
-                  )}
-                  <p className="text-[10px] text-gray-400 leading-relaxed font-medium">Apply the highest available discount on eligible purchases.</p>
+                  </div>
                 </div>
+              )}
 
+              {/* Min Purchase — flat er jonno optional toggle, upto er jonno always-on mandatory field */}
+              {discountType === "flat" ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-bold text-gray-700">Min Purchase</span>
-                      <span className="w-3.5 h-3.5 rounded-full border border-gray-300 text-gray-400 flex items-center justify-center text-[9px] font-black cursor-help" title="Set a minimum purchase requirement for discounts to apply.">?</span>
+                      <span className="w-3.5 h-3.5 rounded-full border border-gray-300 text-gray-400 flex items-center justify-center text-[9px] font-black cursor-help" title="Set a minimum purchase requirement for this discount to apply.">?</span>
                     </div>
                     <button
                       type="button"
@@ -387,24 +425,33 @@ export default function PromoCodeManagerMatrix() {
                       className="w-full px-3.5 py-2 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono animate-slideDown"
                     />
                   )}
-                  <p className="text-[10px] text-gray-400 leading-relaxed font-medium">Set a minimum purchase requirement for discounts to apply.</p>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Minimum Purchase (৳) <span className="text-red-500">*</span></label>
+                  <input
+                    type="number"
+                    required
+                    value={minPurchaseValue}
+                    onChange={(e) => setMinPurchaseValue(e.target.value)}
+                    placeholder="e.g. 2000"
+                    className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <p className="text-[10px] text-gray-400 font-medium mt-1.5">This is also the base point the scaling percentage is calculated from — required for upto discounts.</p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Expiry Date</label>
-                <div className="relative flex items-center">
-                  <input
-                    type="date"
-                    value={expiryDate}
-                    onChange={(e) => setExpiryDate(e.target.value)}
-                    className="w-full pl-3 pr-10 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100"
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  className="w-full pl-3 pr-10 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100"
+                />
                 <p className="text-[10px] text-gray-400 font-medium mt-1.5">Click the calendar icon to pick a date, or leave empty for no expiry.</p>
               </div>
 
-              {/* Action Trigger Buttons Row */}
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-50">
                 <button
                   type="button"
