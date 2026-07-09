@@ -82,6 +82,10 @@ export default function BannersPage() {
   const sideBanners = banners.filter((b) => b.type === "side").sort((a, b) => a.order - b.order);
 
   const openAddModal = (type: "hero" | "side") => {
+    if (type === "side" && sideBanners.length >= 2) {
+      alert("Maximum 2 side banners allowed. Delete one first to add a new one.");
+      return;
+    }
     setModalType(type);
     setEditingBanner(null);
     setFormImageUrl("");
@@ -226,7 +230,8 @@ export default function BannersPage() {
         </h2>
         <button
           onClick={() => openAddModal(type)}
-          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all"
+          disabled={type === "side" && list.length >= 2}
+          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all"
         >
           <Plus size={14} /> Add Banner
         </button>
