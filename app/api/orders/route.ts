@@ -29,8 +29,7 @@ export async function GET() {
 }
 
 // POST: Create a new order (used by the manual "Create Order" admin form,
-// e.g. for orders taken over Messenger/inbox). Online/website checkout orders
-// would call this same endpoint automatically from the storefront in the future.
+// AND by the storefront checkout page). Both flows hit this same endpoint.
 export async function POST(request: Request) {
   try {
     const client = await clientPromise;
@@ -55,6 +54,7 @@ export async function POST(request: Request) {
       deliveryStatus,
       isFraud,
       note,
+      couponCode, // NEW — promo code applied at storefront checkout, if any
     } = data;
 
     // Validation
@@ -70,6 +70,34 @@ export async function POST(request: Request) {
         { error: "Order must contain at least one product" },
         { status: 400 }
       );
+    }
+
+    const normalizedCouponCode = couponCode ? String(couponCode).trim().toUpperCase() : "";
+    // Digits-only phone — checkout page already strips non-digits before sending,
+    // so this matches how it will be stored, and lets us count coupon usage per customer.
+    const normalizedPhone = String(customerPhone).replace(/\D/g, "");
+
+    // ---- Per-customer coupon usage limit enforcement (final server-side gate) ----
+    // The storefront's "Apply Coupon" step already checks this, but that check can be
+    // bypassed (stale UI state, direct API calls, race conditions between two tabs),
+    // so it's re-verified here right before the order actually gets created.
+    if (normalizedCouponCode) {
+      const promo = await db.collection("promocodes").findOne({ codeName: normalizedCouponCode });
+      if (promo?.hasUsageLimit) {
+        const limit = Number(promo.usageLimitPerUser) || 0;
+        if (limit > 0 && normalizedPhone) {
+          const usedCount = await db.collection("orders").countDocuments({
+            couponCode: normalizedCouponCode,
+            customerPhone: normalizedPhone,
+          });
+          if (usedCount >= limit) {
+            return NextResponse.json(
+              { error: `This coupon can only be used ${limit} time(s) per customer.` },
+              { status: 400 }
+            );
+          }
+        }
+      }
     }
 
     const itemsSubtotal = items.reduce(
@@ -92,7 +120,7 @@ export async function POST(request: Request) {
       orderId,
       customerName: String(customerName).trim(),
       customerEmail: customerEmail ? String(customerEmail).trim() : "",
-      customerPhone: String(customerPhone).trim(),
+      customerPhone: normalizedPhone || String(customerPhone).trim(),
       customerAddress: String(customerAddress).trim(),
       items: items.map((item: any) => ({
         productId: item.productId ? new ObjectId(item.productId) : null,
@@ -105,6 +133,7 @@ export async function POST(request: Request) {
       deliveryCharge: Number(deliveryCharge) || 0,
       discountPercent: Number(discountPercent) || 0,
       discountAmount: Number(discountAmount) || 0,
+      couponCode: normalizedCouponCode || null, // NEW — saved so usage-limit counting works
       vatPercent: Number(vatPercent) || 0,
       vatAmount: Number(vatAmount) || 0,
       itemsSubtotal,

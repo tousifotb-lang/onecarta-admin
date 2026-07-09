@@ -17,6 +17,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       maxDiscountValue,
       hasMinPurchase,
       minPurchaseValue,
+      hasUsageLimit,
+      usageLimitPerUser,
       expiryDate,
     } = await request.json();
 
@@ -57,6 +59,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
     }
 
+    if (hasUsageLimit && (!usageLimitPerUser || Number(usageLimitPerUser) <= 0)) {
+      return NextResponse.json({ error: "Usage limit per customer must be a positive number" }, { status: 400 });
+    }
+
     const updateFields = {
       codeName: normalizedCode,
       discountType,
@@ -66,6 +72,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       hasMinPurchase: discountType === "upto" ? true : !!hasMinPurchase,
       minPurchaseValue:
         discountType === "upto" ? minPurchaseValue || "" : hasMinPurchase ? minPurchaseValue || "" : "",
+      hasUsageLimit: !!hasUsageLimit,
+      usageLimitPerUser: hasUsageLimit ? usageLimitPerUser || "" : "",
       expiryDate: expiryDate || "",
       updatedAt: new Date(),
     };

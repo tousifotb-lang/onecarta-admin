@@ -28,6 +28,8 @@ export async function POST(request: Request) {
       maxDiscountValue,
       hasMinPurchase,
       minPurchaseValue,
+      hasUsageLimit,
+      usageLimitPerUser,
       expiryDate,
     } = await request.json();
 
@@ -67,6 +69,11 @@ export async function POST(request: Request) {
       }
     }
 
+    // ---- usage limit validation ----
+    if (hasUsageLimit && (!usageLimitPerUser || Number(usageLimitPerUser) <= 0)) {
+      return NextResponse.json({ error: "Usage limit per customer must be a positive number" }, { status: 400 });
+    }
+
     const newPromo = {
       codeName: normalizedCode,
       discountType,
@@ -76,6 +83,8 @@ export async function POST(request: Request) {
       hasMinPurchase: discountType === "upto" ? true : !!hasMinPurchase,
       minPurchaseValue:
         discountType === "upto" ? minPurchaseValue || "" : hasMinPurchase ? minPurchaseValue || "" : "",
+      hasUsageLimit: !!hasUsageLimit,
+      usageLimitPerUser: hasUsageLimit ? usageLimitPerUser || "" : "",
       expiryDate: expiryDate || "",
       isActive: true,
       createdAt: new Date(),

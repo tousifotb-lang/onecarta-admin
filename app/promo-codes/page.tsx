@@ -14,6 +14,8 @@ interface PromoCode {
   maxDiscountValue: string;
   hasMinPurchase: boolean;
   minPurchaseValue: string;
+  hasUsageLimit: boolean;
+  usageLimitPerUser: string;
   expiryDate: string;
 }
 
@@ -44,6 +46,8 @@ export default function PromoCodeManagerMatrix() {
   const [maxDiscountValue, setMaxDiscountValue] = useState("");
   const [hasMinPurchase, setHasMinPurchase] = useState(false);
   const [minPurchaseValue, setMinPurchaseValue] = useState("");
+  const [hasUsageLimit, setHasUsageLimit] = useState(false);
+  const [usageLimitPerUser, setUsageLimitPerUser] = useState("2");
   const [expiryDate, setExpiryDate] = useState("");
 
   const loadPromoCodes = async () => {
@@ -70,6 +74,8 @@ export default function PromoCodeManagerMatrix() {
     setMaxDiscountValue("");
     setHasMinPurchase(false);
     setMinPurchaseValue("");
+    setHasUsageLimit(false);
+    setUsageLimitPerUser("2");
     setExpiryDate("");
     setModalError("");
   };
@@ -91,6 +97,8 @@ export default function PromoCodeManagerMatrix() {
     setMaxDiscountValue(item.maxDiscountValue || "");
     setHasMinPurchase(item.hasMinPurchase);
     setMinPurchaseValue(item.minPurchaseValue || "");
+    setHasUsageLimit(!!item.hasUsageLimit);
+    setUsageLimitPerUser(item.usageLimitPerUser || "2");
     setExpiryDate(item.expiryDate || "");
     setModalError("");
     setShowModal(true);
@@ -122,6 +130,8 @@ export default function PromoCodeManagerMatrix() {
       maxDiscountValue,
       hasMinPurchase,
       minPurchaseValue,
+      hasUsageLimit,
+      usageLimitPerUser,
       expiryDate,
     };
 
@@ -255,6 +265,12 @@ export default function PromoCodeManagerMatrix() {
                           ৳ {promo.discountType === "flat" ? promo.flatAmount || "0" : promo.maxDiscountValue || "0"}
                         </span>
                       </div>
+                      {promo.hasUsageLimit && (
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Usage Limit</span>
+                          <span className="text-xs font-semibold text-white mt-0.5">{promo.usageLimitPerUser}x per customer</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="pt-2 border-t border-white/10 text-[10px] font-bold text-emerald-100 flex flex-col">
@@ -441,13 +457,46 @@ export default function PromoCodeManagerMatrix() {
                 </div>
               )}
 
+              {/* Usage Limit Per Customer */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-gray-700">Usage Limit Per Customer</span>
+                    <span className="w-3.5 h-3.5 rounded-full border border-gray-300 text-gray-400 flex items-center justify-center text-[9px] font-black cursor-help" title="Restrict how many times a single customer (matched by phone number) can use this coupon.">?</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHasUsageLimit(!hasUsageLimit)}
+                    className={`w-8 h-4.5 rounded-full relative transition-colors duration-200 cursor-pointer ${
+                      hasUsageLimit ? "bg-indigo-600" : "bg-slate-300"
+                    }`}
+                  >
+                    <span className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-3xs transition-all duration-200 ${
+                      hasUsageLimit ? "right-0.5" : "left-0.5"
+                    }`} />
+                  </button>
+                </div>
+                {hasUsageLimit && (
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={usageLimitPerUser}
+                    onChange={(e) => setUsageLimitPerUser(e.target.value)}
+                    placeholder="e.g. 2"
+                    className="w-full px-3.5 py-2 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono animate-slideDown"
+                  />
+                )}
+                <p className="text-[10px] text-gray-400 leading-relaxed font-medium">Limit how many times each customer (identified by phone number) can use this coupon. Leave off for unlimited use.</p>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Expiry Date</label>
                 <input
                   type="date"
                   value={expiryDate}
                   onChange={(e) => setExpiryDate(e.target.value)}
-                  className="w-full pl-3 pr-10 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100"
+                  className="w-full pl-3 pr-10 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:hover:opacity-100"
                 />
                 <p className="text-[10px] text-gray-400 font-medium mt-1.5">Click the calendar icon to pick a date, or leave empty for no expiry.</p>
               </div>
