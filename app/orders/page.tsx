@@ -169,19 +169,59 @@ function getItemsSubtotal(order: Order): number {
   return order.items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
 }
 
+// Fetches /public/logo.png and converts it to a base64 data URL so jsPDF can
+// embed it. Runs client-side only (this file is "use client").
+function fetchImageAsDataURL(url: string): Promise<string> {
+  return fetch(url)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Logo fetch failed with status ${res.status}`);
+      return res.blob();
+    })
+    .then(
+      (blob) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        })
+    );
+}
+
+// Reads the natural pixel dimensions of a data URL image, so the logo can be
+// placed on the PDF at the correct aspect ratio instead of being stretched.
+function getImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
 // Generates and downloads a real PDF invoice for a single order, client-side.
 // No backend call needed — jsPDF builds the document directly in the browser.
-function generateInvoicePDF(order: Order) {
+// Async because the brand logo (public/logo.png) is fetched and embedded first.
+async function generateInvoicePDF(order: Order) {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const marginX = 40;
   let y = 55;
 
-  // ---- Header ----
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
-  doc.setTextColor(44, 39, 105); // brand navy #2c2769
-  doc.text("Onecarta", marginX, y);
+  // ---- Header: brand logo (falls back to text "Onecarta" if the logo fails to load) ----
+  try {
+    const logoDataUrl = await fetchImageAsDataURL("/logo.png");
+    const { width: natW, height: natH } = await getImageDimensions(logoDataUrl);
+    const logoHeight = 34;
+    const logoWidth = natH > 0 ? (natW / natH) * logoHeight : logoHeight * 2;
+    doc.addImage(logoDataUrl, "PNG", marginX, y - 26, logoWidth, logoHeight);
+  } catch (err) {
+    console.error("Invoice logo failed to load, falling back to text:", err);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(20);
+    doc.setTextColor(44, 39, 105); // brand navy #2c2769
+    doc.text("Onecarta", marginX, y);
+  }
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
