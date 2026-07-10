@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { 
-  Store, Network, CloudDownload, BadgePercent, PackageCheck, Truck, ShieldCheck, BarChart3, Scale 
+  Store, Network, CloudDownload, BadgePercent, PackageCheck, Truck, ShieldCheck, BarChart3, Scale, Zap
 } from "lucide-react";
 
 interface SectionStatus {
@@ -102,6 +102,13 @@ export default function ManageStoreConfigurationPanel() {
       description: "Review and deploy updated official customer terms of service, strict privacy mandates, and return/refund standard operating workflows.",
       icon: <Scale size={26} className="text-indigo-600" />,
       href: "/manage-store/legal-policies",
+    },
+    {
+      id: "adm-10",
+      title: "Flash Sale Countdown",
+      description: "Turn the homepage Flash Sale banner on or off, and set the exact date and time its countdown timer should end.",
+      icon: <Zap size={26} className="text-indigo-600" />,
+      href: "/manage-store/flash-sale",
     }
   ];
 
