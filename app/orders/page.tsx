@@ -2,13 +2,14 @@
 
 import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
 import { 
   Search, SlidersHorizontal, Eye, MoreVertical, 
   Loader2, ArrowUpDown, ChevronDown, ChevronUp,
   Calendar, Download, CheckCircle2, AlertCircle, Clock,
   User, MapPin, Phone, Clipboard, FileText, Check, X, ShoppingBag,
   Plus, Package, Users, ExternalLink, Trash2, Mail, ShieldCheck, Truck, Image as ImageIcon,
-  PackageCheck, PackageX, CircleDot, History
+  PackageCheck, PackageX, CircleDot, History, Tag, FileDown
 } from "lucide-react";
 
 interface OrderItem {
@@ -39,6 +40,11 @@ interface Order {
   // shipped. Older orders may not have this array at all — handled gracefully below.
   statusHistory?: StatusHistoryEntry[];
   items: OrderItem[];
+  // NEW — coupon/discount breakdown. Optional because legacy orders created before
+  // this feature won't have these fields saved.
+  itemsSubtotal?: number;
+  discountAmount?: number;
+  couponCode?: string | null;
 }
 
 interface ProductCategory {
@@ -154,6 +160,159 @@ function buildTimelineSteps(order: Order) {
   }
 
   return { steps, isLegacy: true };
+}
+
+// Falls back to summing items when itemsSubtotal wasn't saved on the order
+// (legacy orders created before this field existed).
+function getItemsSubtotal(order: Order): number {
+  if (typeof order.itemsSubtotal === "number") return order.itemsSubtotal;
+  return order.items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
+}
+
+// Generates and downloads a real PDF invoice for a single order, client-side.
+// No backend call needed — jsPDF builds the document directly in the browser.
+function generateInvoicePDF(order: Order) {
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+  let y = 55;
+
+  // ---- Header ----
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.setTextColor(44, 39, 105); // brand navy #2c2769
+  doc.text("Onecarta", marginX, y);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(140, 140, 140);
+  doc.text("onecarta.shop", marginX, y + 15);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`Invoice #${order.orderId}`, pageWidth - marginX, y, { align: "right" });
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(140, 140, 140);
+  doc.text(
+    new Date(order.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+    pageWidth - marginX,
+    y + 15,
+    { align: "right" }
+  );
+
+  y += 45;
+  doc.setDrawColor(230, 230, 230);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 28;
+
+  // ---- Bill To ----
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(140, 140, 140);
+  doc.text("BILL TO", marginX, y);
+  y += 15;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text(order.customerName, marginX, y);
+  y += 14;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text(order.customerPhone, marginX, y);
+  y += 13;
+
+  const addressLines = doc.splitTextToSize(order.customerAddress, 260);
+  doc.text(addressLines, marginX, y);
+  y += addressLines.length * 12 + 25;
+
+  // ---- Items table header ----
+  doc.setFillColor(248, 249, 250);
+  doc.rect(marginX, y, pageWidth - marginX * 2, 22, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 110, 110);
+  doc.text("ITEM", marginX + 8, y + 15);
+  doc.text("QTY", pageWidth - 230, y + 15);
+  doc.text("UNIT PRICE", pageWidth - 165, y + 15);
+  doc.text("TOTAL", pageWidth - marginX - 8, y + 15, { align: "right" });
+  y += 22;
+
+  // ---- Items rows ----
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  order.items.forEach((item) => {
+    y += 18;
+    doc.setTextColor(40, 40, 40);
+    doc.text(item.name, marginX + 8, y, { maxWidth: pageWidth - 340 });
+    doc.text(String(item.qty), pageWidth - 230, y);
+    doc.text(`\u09F3${item.unitPrice.toFixed(2)}`, pageWidth - 165, y);
+    doc.text(`\u09F3${(item.qty * item.unitPrice).toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+    doc.setDrawColor(245, 245, 245);
+    doc.line(marginX, y + 6, pageWidth - marginX, y + 6);
+  });
+
+  y += 30;
+
+  // ---- Summary block (right-aligned) ----
+  const itemsSubtotalValue = getItemsSubtotal(order);
+  const discount = order.discountAmount || 0;
+  const summaryLabelX = pageWidth - 230;
+
+  doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text("Items Subtotal", summaryLabelX, y);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`\u09F3${itemsSubtotalValue.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+  y += 17;
+
+  if (order.couponCode) {
+    doc.setTextColor(90, 90, 90);
+    doc.text(`Coupon Code`, summaryLabelX, y);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    doc.text(order.couponCode, pageWidth - marginX - 8, y, { align: "right" });
+    doc.setFont("helvetica", "normal");
+    y += 17;
+  }
+
+  if (discount > 0) {
+    doc.setTextColor(16, 122, 87); // emerald
+    doc.text("Discount", summaryLabelX, y);
+    doc.text(`-\u09F3${discount.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+    y += 17;
+  }
+
+  doc.setTextColor(90, 90, 90);
+  doc.text("Delivery Charge", summaryLabelX, y);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`\u09F3${order.deliveryCharge.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+  y += 12;
+
+  doc.setDrawColor(200, 200, 200);
+  doc.line(summaryLabelX, y, pageWidth - marginX, y);
+  y += 22;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(44, 39, 105);
+  doc.text("Net Total", summaryLabelX, y);
+  doc.text(`\u09F3${order.totalAmount.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+
+  // ---- Footer ----
+  y += 55;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(160, 160, 160);
+  doc.text("Thank you for shopping with Onecarta.", marginX, y);
+  doc.text(`Payment: ${order.paymentStatus === "PAID" ? "Paid" : "Cash on Delivery"}`, marginX, y + 12);
+
+  doc.save(`invoice-${order.orderId}.pdf`);
 }
 
 export default function OrderManagerMatrix() {
@@ -400,6 +559,8 @@ export default function OrderManagerMatrix() {
       "Payment Status": order.paymentStatus,
       "Items": order.items.map((item) => `${item.name} (x${item.qty})`).join(", "),
       "Items Count": order.items.length,
+      "Coupon Code": order.couponCode || "",
+      "Discount (BDT)": order.discountAmount || 0,
       "Delivery Charge (BDT)": order.deliveryCharge,
       "Total Amount (BDT)": order.totalAmount,
     }));
@@ -418,6 +579,8 @@ export default function OrderManagerMatrix() {
       { wch: 14 }, // Payment Status
       { wch: 40 }, // Items
       { wch: 12 }, // Items Count
+      { wch: 14 }, // Coupon Code
+      { wch: 14 }, // Discount
       { wch: 18 }, // Delivery Charge
       { wch: 16 }, // Total Amount
     ];
@@ -864,7 +1027,7 @@ export default function OrderManagerMatrix() {
 
                       <td className="p-4 text-center relative overflow-visible pr-6">
                         <div className="inline-flex items-center gap-2 overflow-visible">
-                          <button type="button" className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-gray-50 border border-transparent hover:border-gray-100 rounded-lg transition-all cursor-pointer"><FileText size={15} /></button>
+                          <button type="button" onClick={() => generateInvoicePDF(order)} title="Download Invoice" className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-gray-50 border border-transparent hover:border-gray-100 rounded-lg transition-all cursor-pointer"><FileText size={15} /></button>
                           <button type="button" className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-gray-50 border border-transparent hover:border-gray-100 rounded-lg transition-all cursor-pointer"><ExternalLink size={15} /></button>
                           <div className="relative overflow-visible">
                             <button 
@@ -885,8 +1048,8 @@ export default function OrderManagerMatrix() {
                                   <Clipboard size={14} className="text-gray-400" /> Copy Order ID
                                 </button>
                                 <div className="border-t border-gray-50 my-1"></div>
-                                <button type="button" className="w-full px-3.5 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 cursor-pointer">
-                                  <FileText size={14} className="text-gray-400" /> Print Invoice
+                                <button type="button" onClick={() => generateInvoicePDF(order)} className="w-full px-3.5 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 cursor-pointer">
+                                  <FileDown size={14} className="text-gray-400" /> Download Invoice
                                 </button>
                               </div>
                             )}
@@ -1639,10 +1802,44 @@ export default function OrderManagerMatrix() {
                   </div>
                 ))}
               </div>
+
+              {/* ==================================================== */}
+              {/* PRICE BREAKDOWN — subtotal, coupon, discount, delivery */}
+              {/* ==================================================== */}
               <div className="pt-2 text-xs font-semibold space-y-1.5 text-gray-500 border-t border-gray-100">
+                <div className="flex justify-between">
+                  <span>Items Subtotal</span>
+                  <span className="text-gray-800">৳{getItemsSubtotal(selectedOrderDetails).toFixed(2)}</span>
+                </div>
+
+                {selectedOrderDetails.couponCode && (
+                  <div className="flex justify-between text-indigo-600">
+                    <span className="flex items-center gap-1"><Tag size={11} /> Coupon Applied</span>
+                    <span className="font-mono font-bold">{selectedOrderDetails.couponCode}</span>
+                  </div>
+                )}
+
+                {(selectedOrderDetails.discountAmount || 0) > 0 && (
+                  <div className="flex justify-between text-emerald-600 font-bold">
+                    <span>Discount</span>
+                    <span>-৳{(selectedOrderDetails.discountAmount || 0).toFixed(2)}</span>
+                  </div>
+                )}
+
                 <div className="flex justify-between"><span>Delivery Charge</span><span>৳{selectedOrderDetails.deliveryCharge.toFixed(2)}</span></div>
-                <div className="flex justify-between text-sm font-bold text-gray-900 pt-1"><span>Net Total Amount</span><span>৳{selectedOrderDetails.totalAmount.toFixed(2)}</span></div>
+                <div className="flex justify-between text-sm font-bold text-gray-900 pt-1 border-t border-gray-100"><span>Net Total Amount</span><span>৳{selectedOrderDetails.totalAmount.toFixed(2)}</span></div>
               </div>
+            </div>
+
+            {/* Footer — Download Invoice */}
+            <div className="p-4 border-t border-gray-50 bg-gray-50/50 shrink-0">
+              <button
+                type="button"
+                onClick={() => generateInvoicePDF(selectedOrderDetails)}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer"
+              >
+                <FileDown size={14} /> Download Invoice
+              </button>
             </div>
           </div>
         </div>
