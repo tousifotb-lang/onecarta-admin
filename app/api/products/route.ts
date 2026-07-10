@@ -80,6 +80,7 @@ export async function POST(request: Request) {
       tags,
       isFeatured,
       isFlashSale,
+      isBestSelling,
     } = data;
 
     // Strict Validation (matches storefront schema's required fields)
@@ -130,6 +131,7 @@ export async function POST(request: Request) {
       status: resolvedIsActive ? "ACTIVE" : "INACTIVE",
       isFeatured: isFeatured || false,
       isFlashSale: isFlashSale || false,
+      isBestSelling: isBestSelling || false,
       sku: sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
       createdAt: new Date(),
       updatedAt: new Date(),

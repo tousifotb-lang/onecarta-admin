@@ -8,7 +8,7 @@ import {
   Bold, Italic, Underline, Quote, List, ListOrdered, 
   Link2, AlignLeft, AlignCenter, AlignRight, Type, Trash2,
   ChevronUp, ChevronDown, Edit3, Copy, GripVertical, ExternalLink, ArrowUpDown,
-  CheckCircle2, XCircle, AlertTriangle
+  CheckCircle2, XCircle, AlertTriangle, Star, Zap, TrendingUp
 } from "lucide-react";
 
 interface Category {
@@ -36,6 +36,9 @@ interface Product {
   sku?: string;
   description?: string;
   isActive?: boolean;
+  isFeatured?: boolean;
+  isFlashSale?: boolean;
+  isBestSelling?: boolean;
 }
 
 interface VariantOption {
@@ -111,6 +114,12 @@ export default function PremiumProductManager() {
   const [condition, setCondition] = useState("New");
   const [status, setStatus] = useState("ACTIVE");
 
+  // Homepage Visibility Tags — controls which storefront homepage sections
+  // (Featured Products, Flash Sale, Best Selling) this product appears in.
+  const [isFeatured, setIsFeatured] = useState(false);
+  const [isFlashSale, setIsFlashSale] = useState(false);
+  const [isBestSelling, setIsBestSelling] = useState(false);
+
   // Shipping States
   const [applyDefaultShipping, setApplyDefaultShipping] = useState(true);
   const [shippingDefaultCharge, setShippingDefaultCharge] = useState("0");
@@ -135,6 +144,7 @@ export default function PremiumProductManager() {
     dimensions: true,
     condition: true,
     status: true,
+    visibility: true,
   });
 
   const toggleSection = (section: keyof typeof openSections) => {
@@ -472,6 +482,7 @@ const promptVideoUrl = () => {
     setCategoryId(""); setBrand(""); setWeight(""); setLength(""); setWidth(""); setHeight("");
     setApplyDefaultShipping(true); setShippingDefaultCharge("0"); setShippingInsideDhaka("80"); setShippingOutsideDhaka("130");
     setVariants([]); setSpecifications([]); setStatus("ACTIVE"); setCondition("New");
+    setIsFeatured(false); setIsFlashSale(false); setIsBestSelling(false);
     if (editorRef.current) editorRef.current.innerHTML = "";
   };
 
@@ -496,6 +507,9 @@ const promptVideoUrl = () => {
       setCategoryId(matchedCategory ? matchedCategory._id : "");
     }
     setStatus(prod.isActive === false ? "DRAFT" : "ACTIVE");
+    setIsFeatured(prod.isFeatured || false);
+    setIsFlashSale(prod.isFlashSale || false);
+    setIsBestSelling(prod.isBestSelling || false);
     setView("add");
   };
 
@@ -549,6 +563,9 @@ const promptVideoUrl = () => {
       brand,
       stock: Number(stock) || 0,
       isActive: status === "ACTIVE",
+      isFeatured,
+      isFlashSale,
+      isBestSelling,
       sku: sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
       shipping: {
         applyDefault: applyDefaultShipping,
@@ -729,22 +746,43 @@ const promptVideoUrl = () => {
                         <div className="w-11 h-12 border border-gray-100 rounded-xl overflow-hidden bg-gray-50 flex items-center justify-center shadow-2xs">
                           {prod.images && prod.images[0] ? <img src={prod.images[0]} alt="" className="w-full h-full object-cover" /> : <ImageIcon size={20} className="text-gray-300" />}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900 text-sm block group-hover:text-indigo-600 transition-colors">{prod.name}</span>
-                          <a 
-                            href={`/products/${prod.slug}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-gray-400 hover:text-indigo-600 transition-colors p-0.5 rounded"
-                            onClick={(e) => e.stopPropagation()}
-                            title="View Product Link"
-                          >
-                            <ExternalLink size={14} />
-                          </a>
-                          {prod.isActive === false && (
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md">
-                              Draft
-                            </span>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-gray-900 text-sm block group-hover:text-indigo-600 transition-colors">{prod.name}</span>
+                            <a 
+                              href={`/products/${prod.slug}`} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-gray-400 hover:text-indigo-600 transition-colors p-0.5 rounded"
+                              onClick={(e) => e.stopPropagation()}
+                              title="View Product Link"
+                            >
+                              <ExternalLink size={14} />
+                            </a>
+                            {prod.isActive === false && (
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md">
+                                Draft
+                              </span>
+                            )}
+                          </div>
+                          {(prod.isFeatured || prod.isFlashSale || prod.isBestSelling) && (
+                            <div className="flex items-center gap-1">
+                              {prod.isFeatured && (
+                                <span className="text-[9px] font-bold uppercase tracking-wide text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
+                                  <Star size={9} /> Featured
+                                </span>
+                              )}
+                              {prod.isFlashSale && (
+                                <span className="text-[9px] font-bold uppercase tracking-wide text-red-600 bg-red-50 border border-red-100 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
+                                  <Zap size={9} /> Flash Sale
+                                </span>
+                              )}
+                              {prod.isBestSelling && (
+                                <span className="text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
+                                  <TrendingUp size={9} /> Best Selling
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
                       </td>
@@ -1244,7 +1282,61 @@ const promptVideoUrl = () => {
 
             {/* ==================== RIGHT SIDEBAR PANEL ==================== */}
             <div className="space-y-5">
-              
+
+              {/* Homepage Visibility — Featured / Flash Sale / Best Selling toggles */}
+              <div className="bg-white border border-gray-100 rounded-xl shadow-2xs overflow-hidden">
+                <div onClick={() => toggleSection("visibility")} className="p-4.5 flex items-center justify-between border-b border-gray-50 bg-white cursor-pointer select-none group">
+                  <h4 className="text-sm font-semibold text-gray-700 group-hover:text-indigo-600 transition-colors">Homepage Visibility</h4>
+                  <span className="text-gray-400">{openSections.visibility ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</span>
+                </div>
+                {openSections.visibility && (
+                  <div className="p-4.5 space-y-3.5 bg-white animate-slideDown">
+                    <p className="text-[11px] text-gray-400 font-medium leading-relaxed -mt-1 mb-1">
+                      Tick to show this product in the matching homepage section on the storefront.
+                    </p>
+
+                    <div className="flex items-center justify-between border-b border-gray-50 pb-3">
+                      <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                        <Star size={14} className="text-amber-500" /> Featured Products
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsFeatured(!isFeatured)}
+                        className={`w-8 h-4.5 rounded-full relative transition-colors duration-200 cursor-pointer ${isFeatured ? "bg-indigo-600" : "bg-slate-300"}`}
+                      >
+                        <span className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-xs transition-all duration-200 ${isFeatured ? "right-0.5" : "left-0.5"}`} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between border-b border-gray-50 pb-3">
+                      <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                        <Zap size={14} className="text-red-500" /> Flash Sale
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsFlashSale(!isFlashSale)}
+                        className={`w-8 h-4.5 rounded-full relative transition-colors duration-200 cursor-pointer ${isFlashSale ? "bg-indigo-600" : "bg-slate-300"}`}
+                      >
+                        <span className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-xs transition-all duration-200 ${isFlashSale ? "right-0.5" : "left-0.5"}`} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                        <TrendingUp size={14} className="text-emerald-500" /> Best Selling
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsBestSelling(!isBestSelling)}
+                        className={`w-8 h-4.5 rounded-full relative transition-colors duration-200 cursor-pointer ${isBestSelling ? "bg-indigo-600" : "bg-slate-300"}`}
+                      >
+                        <span className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-xs transition-all duration-200 ${isBestSelling ? "right-0.5" : "left-0.5"}`} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Category Assignment */}
               <div className="bg-white border border-gray-100 rounded-xl shadow-2xs overflow-hidden">
                 <div onClick={() => toggleSection("category")} className="p-4.5 flex items-center justify-between border-b border-gray-50 bg-white cursor-pointer select-none group">
