@@ -10,13 +10,13 @@ interface SearchLogEntry {
   lastSearchedAt: string;
 }
 
-export default function SearchAnalyticsPage() {
+export default function AnalyticsPage() {
   const [topSearches, setTopSearches] = useState<SearchLogEntry[]>([]);
   const [zeroResultSearches, setZeroResultSearches] = useState<SearchLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/search-log/analytics")
+    fetch("/api/search-analytics")
       .then((r) => r.json())
       .then((d) => {
         setTopSearches(d.topSearches || []);
