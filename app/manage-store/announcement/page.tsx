@@ -3,11 +3,11 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { ChevronLeft, Megaphone, Loader2, Check } from "lucide-react";
+import { ChevronLeft, Megaphone, Loader2, Check, Plus, Trash2 } from "lucide-react";
 
 export default function AnnouncementSettingsPage() {
   const [isActive, setIsActive] = useState(false);
-  const [text, setText] = useState("");
+  const [messages, setMessages] = useState<string[]>([""]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -20,7 +20,7 @@ export default function AnnouncementSettingsPage() {
         const data = await res.json();
         if (res.ok) {
           setIsActive(data.isActive ?? false);
-          setText(data.text ?? "");
+          setMessages(Array.isArray(data.messages) && data.messages.length > 0 ? data.messages : [""]);
         }
       } catch (err) {
         console.error("Failed to load announcement settings:", err);
@@ -31,6 +31,21 @@ export default function AnnouncementSettingsPage() {
     loadSettings();
   }, []);
 
+  const handleMessageChange = (index: number, value: string) => {
+    setMessages((prev) => prev.map((m, i) => (i === index ? value : m)));
+  };
+
+  const handleAddMessage = () => {
+    setMessages((prev) => [...prev, ""]);
+  };
+
+  const handleRemoveMessage = (index: number) => {
+    setMessages((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length > 0 ? next : [""]; // always keep at least one input row
+    });
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     setSaveError("");
@@ -39,10 +54,12 @@ export default function AnnouncementSettingsPage() {
       const res = await fetch("/api/settings/announcement", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isActive, text }),
+        body: JSON.stringify({ isActive, messages }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to save settings");
+      // Server strips blanks — reflect that back so the UI matches what's actually saved
+      setMessages(Array.isArray(data.messages) && data.messages.length > 0 ? data.messages : [""]);
       setSavedJustNow(true);
       setTimeout(() => setSavedJustNow(false), 2500);
     } catch (err: any) {
@@ -72,7 +89,7 @@ export default function AnnouncementSettingsPage() {
           <div className="p-3 bg-indigo-50 rounded-2xl text-indigo-600"><Megaphone size={22} /></div>
           <div>
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">Announcement Bar</h1>
-            <p className="text-sm text-gray-400 font-medium mt-0.5">Show a scrolling message above the navbar for coupons, offers, or announcements.</p>
+            <p className="text-sm text-gray-400 font-medium mt-0.5">Control the scrolling coupon/offer strip above the navbar. Add multiple messages — they'll cycle one at a time.</p>
           </div>
         </div>
 
@@ -86,7 +103,9 @@ export default function AnnouncementSettingsPage() {
           <div className="flex items-center justify-between pb-5 border-b border-gray-50">
             <div>
               <p className="text-sm font-bold text-gray-800">Show Announcement Bar</p>
-              <p className="text-xs text-gray-400 font-medium mt-0.5">Turn off to hide the strip completely — the navbar will look exactly as it does today.</p>
+              <p className="text-xs text-gray-400 font-medium mt-0.5">
+                Turn off (or leave all messages empty) to hide the strip completely — the phone number / order status row will show instead, exactly as it does today.
+              </p>
             </div>
             <button
               type="button"
@@ -101,18 +120,39 @@ export default function AnnouncementSettingsPage() {
             </button>
           </div>
 
-          {/* Message text */}
-          <div className={isActive ? "" : "opacity-40 pointer-events-none"}>
-            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Announcement Message</label>
-            <textarea
-              rows={3}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="e.g. 🎉 Use code SUMMER20 for 20% off — Free delivery on orders above ৳999!"
-              className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm font-semibold bg-white text-gray-700 outline-none focus:border-indigo-500 resize-none"
-            />
-            <p className="text-[11px] text-gray-400 font-medium mt-1.5 leading-relaxed">
-              This text will continuously scroll right-to-left above the navbar. Leaving it empty hides the bar entirely, even if the toggle above is on.
+          {/* Messages list */}
+          <div className={isActive ? "space-y-3" : "space-y-3 opacity-40 pointer-events-none"}>
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">Announcement Messages</label>
+
+            {messages.map((msg, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={msg}
+                  onChange={(e) => handleMessageChange(index, e.target.value)}
+                  placeholder="e.g. 🎉 Use code SUMMER20 for 20% off — Free delivery on orders above ৳999!"
+                  className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm font-semibold bg-white text-gray-700 outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRemoveMessage(index)}
+                  className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors cursor-pointer shrink-0"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+
+            <button
+              type="button"
+              onClick={handleAddMessage}
+              className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1 py-1.5 cursor-pointer"
+            >
+              <Plus size={14} /> Add another message
+            </button>
+
+            <p className="text-[11px] text-gray-400 font-medium leading-relaxed pt-1">
+              Each message scrolls fully across, disappears, then the next one starts. With one message, it just repeats on a loop.
             </p>
           </div>
 

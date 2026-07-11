@@ -10,7 +10,7 @@ export async function GET() {
     const doc = await db.collection("settings").findOne({ key: "announcement" });
 
     return NextResponse.json(
-      { isActive: doc?.isActive ?? false, text: doc?.text ?? "" },
+      { isActive: doc?.isActive ?? false, messages: Array.isArray(doc?.messages) ? doc.messages : [] },
       { status: 200 }
     );
   } catch (error) {
@@ -23,7 +23,11 @@ export async function PUT(request: Request) {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
-    const { isActive, text } = await request.json();
+    const { isActive, messages } = await request.json();
+
+    const cleanedMessages = Array.isArray(messages)
+      ? messages.map((m: any) => String(m).trim()).filter((m: string) => m.length > 0)
+      : [];
 
     await db.collection("settings").updateOne(
       { key: "announcement" },
@@ -31,7 +35,7 @@ export async function PUT(request: Request) {
         $set: {
           key: "announcement",
           isActive: !!isActive,
-          text: typeof text === "string" ? text.trim() : "",
+          messages: cleanedMessages,
           updatedAt: new Date(),
         },
       },
