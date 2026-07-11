@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { 
-  Store, Network, CloudDownload, BadgePercent, PackageCheck, Truck, ShieldCheck, BarChart3, Scale, Zap
+  Store, Network, CloudDownload, BadgePercent, PackageCheck, Truck, ShieldCheck, BarChart3, Scale, Zap, Megaphone
 } from "lucide-react";
 
 interface SectionStatus {
@@ -109,6 +109,13 @@ export default function ManageStoreConfigurationPanel() {
       description: "Turn the homepage Flash Sale banner on or off, and set the exact date and time its countdown timer should end.",
       icon: <Zap size={26} className="text-indigo-600" />,
       href: "/manage-store/flash-sale",
+    },
+    {
+      id: "adm-11",
+      title: "Announcement Bar",
+      description: "Control the scrolling coupon/offer announcement strip that shows above the navbar. Leave the message empty to hide it entirely.",
+      icon: <Megaphone size={26} className="text-indigo-600" />,
+      href: "/manage-store/announcement",
     }
   ];
 
