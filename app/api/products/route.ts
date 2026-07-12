@@ -214,6 +214,22 @@ export async function PATCH(request: Request) {
 
       const { _id, ...updateFields } = body;
 
+      // Detect a stock-out -> back-in-stock transition (0 or less -> >0) so
+      // we can stamp restockedAt. This is what powers the storefront's
+      // "Recently Restocked" section — only runs when this edit actually
+      // touches the stock field.
+      if (updateFields.stock !== undefined) {
+        const existingProduct = await db.collection("products").findOne(
+          { _id: new ObjectId(singleId) },
+          { projection: { stock: 1 } }
+        );
+        const oldStock = existingProduct?.stock ?? 0;
+        const newStock = parseInt(updateFields.stock) || 0;
+        if (oldStock <= 0 && newStock > 0) {
+          updateFields.restockedAt = new Date();
+        }
+      }
+
       // Recompute slug + discount if name/price fields changed, keeping data consistent
       if (updateFields.name) {
         updateFields.slug = updateFields.name
