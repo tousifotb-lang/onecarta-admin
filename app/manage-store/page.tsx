@@ -77,10 +77,10 @@ export default function ManageStoreConfigurationPanel() {
     },
     {
       id: "adm-6",
-      title: "Shipping & Delivery Engine",
-      description: "Set up domestic shipping rate tables, automatic courier API allocations, and distinct regional logistics delivery coverage zones.",
+      title: "Delivery Charges",
+      description: "Control the delivery rates customers see at checkout — Inside Dhaka, Savar/Keranigonj, and Outside Dhaka. Adjust anytime for a campaign, then switch back.",
       icon: <Truck size={26} className="text-indigo-600" />,
-      href: "/manage-store/shipping",
+      href: "/manage-store/delivery",
     },
     {
       id: "adm-7",
@@ -122,7 +122,6 @@ export default function ManageStoreConfigurationPanel() {
   return (
     <div className="min-h-screen bg-[#f8f9fa] text-gray-800 antialiased font-sans p-6 sm:p-8 select-none">
 
-      {/* Header */}
       <div className="w-full space-y-2 pb-8 border-b border-gray-200/60 mb-10">
         <h1 className="text-xl font-semibold text-gray-900 tracking-tight">Admin Operations Center</h1>
         <p className="text-sm sm:text-base text-gray-500 font-medium max-w-3xl leading-relaxed">
@@ -130,7 +129,6 @@ export default function ManageStoreConfigurationPanel() {
         </p>
       </div>
 
-      {/* Cards Grid */}
       <div className="w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {adminManagementCards.map((card) => {
           const status = statusMap[card.id];
@@ -143,7 +141,6 @@ export default function ManageStoreConfigurationPanel() {
             >
               <div className="space-y-5">
 
-                {/* Icon + Badge row */}
                 <div className="flex items-center justify-between">
                   <div className="p-3.5 bg-indigo-50/80 group-hover:bg-indigo-600 group-hover:text-white rounded-2xl transition-all duration-300 text-indigo-600 shrink-0 shadow-xs">
                     {card.icon}
@@ -162,7 +159,6 @@ export default function ManageStoreConfigurationPanel() {
                   )}
                 </div>
 
-                {/* Text */}
                 <div className="space-y-2">
                   <h3 className="text-base sm:text-lg font-extrabold text-gray-900 tracking-tight group-hover:text-indigo-600 transition-colors duration-200">
                     {card.title}

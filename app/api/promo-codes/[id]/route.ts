@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import clientPromise from "../../../../lib/mongodb";
 import { ObjectId } from "mongodb";
 
-// PATCH: Update an existing promo code
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
@@ -19,6 +18,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       minPurchaseValue,
       hasUsageLimit,
       usageLimitPerUser,
+      freeDelivery,
+      freeDeliveryScope,
       expiryDate,
     } = await request.json();
 
@@ -41,8 +42,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
 
     if (discountType === "flat") {
-      if (!flatAmount || Number(flatAmount) <= 0) {
-        return NextResponse.json({ error: "Flat discount amount is required" }, { status: 400 });
+      const hasFlatAmount = flatAmount && Number(flatAmount) > 0;
+      if (!hasFlatAmount && !freeDelivery) {
+        return NextResponse.json(
+          { error: "Flat discount amount is required (or enable Free Delivery instead)" },
+          { status: 400 }
+        );
       }
       if (hasMinPurchase && (!minPurchaseValue || Number(minPurchaseValue) <= 0)) {
         return NextResponse.json({ error: "Minimum purchase value is required" }, { status: 400 });
@@ -63,6 +68,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       return NextResponse.json({ error: "Usage limit per customer must be a positive number" }, { status: 400 });
     }
 
+    if (freeDelivery && !["dhaka", "all"].includes(freeDeliveryScope)) {
+      return NextResponse.json(
+        { error: "Please select where Free Delivery applies (Inside Dhaka or All Areas)" },
+        { status: 400 }
+      );
+    }
+
     const updateFields = {
       codeName: normalizedCode,
       discountType,
@@ -74,6 +86,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         discountType === "upto" ? minPurchaseValue || "" : hasMinPurchase ? minPurchaseValue || "" : "",
       hasUsageLimit: !!hasUsageLimit,
       usageLimitPerUser: hasUsageLimit ? usageLimitPerUser || "" : "",
+      freeDelivery: !!freeDelivery,
+      freeDeliveryScope: freeDelivery ? (freeDeliveryScope === "all" ? "all" : "dhaka") : null,
       expiryDate: expiryDate || "",
       updatedAt: new Date(),
     };
@@ -87,16 +101,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 }
 
-// DELETE: Remove a promo code
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-
     const client = await clientPromise;
     const db = client.db("onecarta");
-
     await db.collection("promocodes").deleteOne({ _id: new ObjectId(id) });
-
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: "Failed to delete promo code" }, { status: 500 });

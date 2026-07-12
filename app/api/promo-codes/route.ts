@@ -1,28 +1,24 @@
 import { NextResponse } from "next/server";
 import clientPromise from "../../../lib/mongodb";
 
-// GET: Fetch all promo codes, newest first
 export async function GET() {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
-
     const promoCodes = await db.collection("promocodes").find({}).sort({ createdAt: -1 }).toArray();
-
     return NextResponse.json(promoCodes, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: "Failed to fetch promo codes" }, { status: 500 });
   }
 }
 
-// POST: Create a new promo code. Code name must be unique (case-insensitive).
 export async function POST(request: Request) {
   try {
     const client = await clientPromise;
     const db = client.db("onecarta");
     const {
       codeName,
-      discountType, // "flat" | "upto"
+      discountType,
       flatAmount,
       basePercentage,
       maxDiscountValue,
@@ -30,6 +26,8 @@ export async function POST(request: Request) {
       minPurchaseValue,
       hasUsageLimit,
       usageLimitPerUser,
+      freeDelivery,
+      freeDeliveryScope,
       expiryDate,
     } = await request.json();
 
@@ -50,14 +48,19 @@ export async function POST(request: Request) {
 
     // ---- discountType-specific validation ----
     if (discountType === "flat") {
-      if (!flatAmount || Number(flatAmount) <= 0) {
-        return NextResponse.json({ error: "Flat discount amount is required" }, { status: 400 });
+      // Flat amount ekhon optional hote pare jodi freeDelivery enable kora thake —
+      // "shudhu free delivery" type-er coupon banano jay bina discount ei.
+      const hasFlatAmount = flatAmount && Number(flatAmount) > 0;
+      if (!hasFlatAmount && !freeDelivery) {
+        return NextResponse.json(
+          { error: "Flat discount amount is required (or enable Free Delivery instead)" },
+          { status: 400 }
+        );
       }
       if (hasMinPurchase && (!minPurchaseValue || Number(minPurchaseValue) <= 0)) {
         return NextResponse.json({ error: "Minimum purchase value is required" }, { status: 400 });
       }
     } else {
-      // upto — min purchase, base%, max discount shobgula mandatory
       if (!minPurchaseValue || Number(minPurchaseValue) <= 0) {
         return NextResponse.json({ error: "Minimum purchase value is required for 'upto' discounts" }, { status: 400 });
       }
@@ -69,9 +72,15 @@ export async function POST(request: Request) {
       }
     }
 
-    // ---- usage limit validation ----
     if (hasUsageLimit && (!usageLimitPerUser || Number(usageLimitPerUser) <= 0)) {
       return NextResponse.json({ error: "Usage limit per customer must be a positive number" }, { status: 400 });
+    }
+
+    if (freeDelivery && !["dhaka", "all"].includes(freeDeliveryScope)) {
+      return NextResponse.json(
+        { error: "Please select where Free Delivery applies (Inside Dhaka or All Areas)" },
+        { status: 400 }
+      );
     }
 
     const newPromo = {
@@ -85,6 +94,9 @@ export async function POST(request: Request) {
         discountType === "upto" ? minPurchaseValue || "" : hasMinPurchase ? minPurchaseValue || "" : "",
       hasUsageLimit: !!hasUsageLimit,
       usageLimitPerUser: hasUsageLimit ? usageLimitPerUser || "" : "",
+      // NEW — free delivery, independent of the discount above
+      freeDelivery: !!freeDelivery,
+      freeDeliveryScope: freeDelivery ? (freeDeliveryScope === "all" ? "all" : "dhaka") : null,
       expiryDate: expiryDate || "",
       isActive: true,
       createdAt: new Date(),
