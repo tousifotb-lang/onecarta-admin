@@ -9,13 +9,16 @@ import {
   Calendar, Download, CheckCircle2, AlertCircle, Clock,
   User, MapPin, Phone, Clipboard, FileText, Check, X, ShoppingBag,
   Plus, Package, Users, ExternalLink, Trash2, Mail, ShieldCheck, Truck, Image as ImageIcon,
-  PackageCheck, PackageX, CircleDot, History, Tag, FileDown
+  PackageCheck, PackageX, CircleDot, History, Tag, FileDown, CreditCard
 } from "lucide-react";
 
 interface OrderItem {
   name: string;
   qty: number;
   unitPrice: number;
+  // Original (pre-discount) unit price — present on orders created after the
+  // "product savings" feature shipped. Optional so legacy orders don't break.
+  originalUnitPrice?: number;
 }
 
 interface StatusHistoryEntry {
@@ -45,6 +48,12 @@ interface Order {
   itemsSubtotal?: number;
   discountAmount?: number;
   couponCode?: string | null;
+  // NEW — product-level savings (from discounted item prices) kept completely
+  // separate from the coupon discount above. Optional for legacy orders.
+  productSavings?: number;
+  // NEW — how the order was paid. Optional for legacy orders (defaults to COD
+  // everywhere below, matching the storefront's only current payment option).
+  paymentMethod?: string;
 }
 
 interface ProductCategory {
@@ -167,6 +176,25 @@ function buildTimelineSteps(order: Order) {
 function getItemsSubtotal(order: Order): number {
   if (typeof order.itemsSubtotal === "number") return order.itemsSubtotal;
   return order.items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
+}
+
+// "Total Price" — sum of ORIGINAL (pre-discount) unit prices across items.
+// Falls back to the selling price per item when originalUnitPrice wasn't
+// recorded (legacy orders), in which case this equals the subtotal and
+// product savings correctly comes out to zero below.
+function getOriginalItemsSubtotal(order: Order): number {
+  return order.items.reduce(
+    (sum, item) => sum + item.qty * (item.originalUnitPrice ?? item.unitPrice),
+    0
+  );
+}
+
+// Product-level savings (from discounted item prices) — kept completely
+// separate from any coupon discount. Prefers the value saved on the order
+// itself; falls back to computing it from item prices for legacy orders.
+function getProductSavings(order: Order): number {
+  if (typeof order.productSavings === "number") return order.productSavings;
+  return Math.max(0, getOriginalItemsSubtotal(order) - getItemsSubtotal(order));
 }
 
 // Fetches /public/logo.png and converts it to a base64 data URL so jsPDF can
@@ -300,13 +328,31 @@ async function generateInvoicePDF(order: Order) {
   y += 30;
 
   // ---- Summary block (right-aligned) ----
+  // Order: Total Price -> Product Savings -> Subtotal -> Coupon Code ->
+  // Coupon Discount (kept separate from product savings) -> Delivery ->
+  // Payable Amount -> Payment Method.
+  const totalPriceValue = getOriginalItemsSubtotal(order);
+  const productSavingsValue = getProductSavings(order);
   const itemsSubtotalValue = getItemsSubtotal(order);
-  const discount = order.discountAmount || 0;
+  const couponDiscount = order.discountAmount || 0;
   const summaryLabelX = pageWidth - 230;
 
   doc.setFontSize(9);
   doc.setTextColor(90, 90, 90);
-  doc.text("Items Subtotal", summaryLabelX, y);
+  doc.text("Total Price", summaryLabelX, y);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`\u09F3${totalPriceValue.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+  y += 17;
+
+  if (productSavingsValue > 0) {
+    doc.setTextColor(16, 122, 87); // emerald
+    doc.text("Product Savings", summaryLabelX, y);
+    doc.text(`-\u09F3${productSavingsValue.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+    y += 17;
+  }
+
+  doc.setTextColor(90, 90, 90);
+  doc.text("Subtotal", summaryLabelX, y);
   doc.setTextColor(20, 20, 20);
   doc.text(`\u09F3${itemsSubtotalValue.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
   y += 17;
@@ -321,10 +367,10 @@ async function generateInvoicePDF(order: Order) {
     y += 17;
   }
 
-  if (discount > 0) {
+  if (couponDiscount > 0) {
     doc.setTextColor(16, 122, 87); // emerald
-    doc.text("Discount", summaryLabelX, y);
-    doc.text(`-\u09F3${discount.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
+    doc.text("Coupon Discount", summaryLabelX, y);
+    doc.text(`-\u09F3${couponDiscount.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
     y += 17;
   }
 
@@ -341,7 +387,7 @@ async function generateInvoicePDF(order: Order) {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
   doc.setTextColor(44, 39, 105);
-  doc.text("Net Total", summaryLabelX, y);
+  doc.text("Payable Amount", summaryLabelX, y);
   doc.text(`\u09F3${order.totalAmount.toFixed(2)}`, pageWidth - marginX - 8, y, { align: "right" });
 
   // ---- Footer ----
@@ -350,7 +396,7 @@ async function generateInvoicePDF(order: Order) {
   doc.setFontSize(8);
   doc.setTextColor(160, 160, 160);
   doc.text("Thank you for shopping with Onecarta.", marginX, y);
-  doc.text(`Payment: ${order.paymentStatus === "PAID" ? "Paid" : "Cash on Delivery"}`, marginX, y + 12);
+  doc.text(`Payment Method: ${order.paymentMethod || "Cash on Delivery (COD)"}`, marginX, y + 12);
 
   doc.save(`invoice-${order.orderId}.pdf`);
 }
@@ -597,12 +643,15 @@ export default function OrderManagerMatrix() {
       "Date": new Date(order.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }),
       "Status": order.deliveryStatus,
       "Payment Status": order.paymentStatus,
+      "Payment Method": order.paymentMethod || "Cash on Delivery (COD)",
       "Items": order.items.map((item) => `${item.name} (x${item.qty})`).join(", "),
       "Items Count": order.items.length,
+      "Total Price (BDT)": getOriginalItemsSubtotal(order),
+      "Product Savings (BDT)": getProductSavings(order),
       "Coupon Code": order.couponCode || "",
-      "Discount (BDT)": order.discountAmount || 0,
+      "Coupon Discount (BDT)": order.discountAmount || 0,
       "Delivery Charge (BDT)": order.deliveryCharge,
-      "Total Amount (BDT)": order.totalAmount,
+      "Payable Amount (BDT)": order.totalAmount,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -617,12 +666,15 @@ export default function OrderManagerMatrix() {
       { wch: 14 }, // Date
       { wch: 14 }, // Status
       { wch: 14 }, // Payment Status
+      { wch: 20 }, // Payment Method
       { wch: 40 }, // Items
       { wch: 12 }, // Items Count
+      { wch: 16 }, // Total Price
+      { wch: 18 }, // Product Savings
       { wch: 14 }, // Coupon Code
-      { wch: 14 }, // Discount
+      { wch: 18 }, // Coupon Discount
       { wch: 18 }, // Delivery Charge
-      { wch: 16 }, // Total Amount
+      { wch: 18 }, // Payable Amount
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -781,6 +833,7 @@ export default function OrderManagerMatrix() {
           name: line.product.title,
           qty: line.qty,
           unitPrice: getLineUnitPrice(line.product),
+          originalUnitPrice: line.product.price,
         })),
         orderType: formOrderType,
         deliveryZone,
@@ -1835,40 +1888,82 @@ export default function OrderManagerMatrix() {
 
               <div className="space-y-2.5">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Purchased Items</p>
-                {selectedOrderDetails.items.map((item, index) => (
-                  <div key={index} className="flex items-center justify-between border-b border-gray-50 pb-2 text-xs font-medium">
-                    <div className="max-w-xs"><p className="text-gray-800 font-medium">{item.name}</p><p className="text-gray-400 mt-0.5">Qty: {item.qty} x ৳{item.unitPrice}</p></div>
-                    <span className="font-semibold text-gray-900">৳{(item.qty * item.unitPrice).toFixed(2)}</span>
-                  </div>
-                ))}
+                {selectedOrderDetails.items.map((item, index) => {
+                  const itemHasCutPrice = typeof item.originalUnitPrice === "number" && item.originalUnitPrice > item.unitPrice;
+                  return (
+                    <div key={index} className="flex items-center justify-between border-b border-gray-50 pb-2 text-xs font-medium">
+                      <div className="max-w-xs">
+                        <p className="text-gray-800 font-medium">{item.name}</p>
+                        <p className="text-gray-400 mt-0.5">
+                          Qty: {item.qty} x ৳{item.unitPrice}
+                          {itemHasCutPrice && (
+                            <span className="line-through text-gray-300 ml-1.5">৳{item.originalUnitPrice}</span>
+                          )}
+                        </p>
+                      </div>
+                      <span className="font-semibold text-gray-900">৳{(item.qty * item.unitPrice).toFixed(2)}</span>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* ==================================================== */}
-              {/* PRICE BREAKDOWN — subtotal, coupon, discount, delivery */}
+              {/* PRICE BREAKDOWN — Total Price, Product Savings,       */}
+              {/* Subtotal, Coupon Discount (kept separate), Delivery,  */}
+              {/* Payable Amount, Payment Method                        */}
               {/* ==================================================== */}
-              <div className="pt-2 text-xs font-semibold space-y-1.5 text-gray-500 border-t border-gray-100">
-                <div className="flex justify-between">
-                  <span>Items Subtotal</span>
-                  <span className="text-gray-800">৳{getItemsSubtotal(selectedOrderDetails).toFixed(2)}</span>
-                </div>
+              {(() => {
+                const totalPriceValue = getOriginalItemsSubtotal(selectedOrderDetails);
+                const productSavingsValue = getProductSavings(selectedOrderDetails);
+                const itemsSubtotalValue = getItemsSubtotal(selectedOrderDetails);
 
-                {selectedOrderDetails.couponCode && (
-                  <div className="flex justify-between text-indigo-600">
-                    <span className="flex items-center gap-1"><Tag size={11} /> Coupon Applied</span>
-                    <span className="font-mono font-bold">{selectedOrderDetails.couponCode}</span>
+                return (
+                  <div className="pt-2 text-xs font-semibold space-y-1.5 text-gray-500 border-t border-gray-100">
+                    <div className="flex justify-between">
+                      <span>Total Price</span>
+                      <span className="text-gray-800">৳{totalPriceValue.toFixed(2)}</span>
+                    </div>
+
+                    {productSavingsValue > 0 && (
+                      <div className="flex justify-between text-emerald-600 font-bold">
+                        <span>Product Savings</span>
+                        <span>-৳{productSavingsValue.toFixed(2)}</span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between">
+                      <span>Subtotal</span>
+                      <span className="text-gray-800">৳{itemsSubtotalValue.toFixed(2)}</span>
+                    </div>
+
+                    {selectedOrderDetails.couponCode && (
+                      <div className="flex justify-between text-indigo-600">
+                        <span className="flex items-center gap-1"><Tag size={11} /> Coupon Applied</span>
+                        <span className="font-mono font-bold">{selectedOrderDetails.couponCode}</span>
+                      </div>
+                    )}
+
+                    {(selectedOrderDetails.discountAmount || 0) > 0 && (
+                      <div className="flex justify-between text-emerald-600 font-bold">
+                        <span>Coupon Discount</span>
+                        <span>-৳{(selectedOrderDetails.discountAmount || 0).toFixed(2)}</span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between"><span>Delivery Charge</span><span>৳{selectedOrderDetails.deliveryCharge.toFixed(2)}</span></div>
+
+                    <div className="flex justify-between text-sm font-bold text-gray-900 pt-1 border-t border-gray-100">
+                      <span>Payable Amount</span>
+                      <span>৳{selectedOrderDetails.totalAmount.toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center pt-1.5 text-[11px] text-gray-500">
+                      <span className="flex items-center gap-1.5"><CreditCard size={12} className="text-gray-400" /> Payment Method</span>
+                      <span className="font-bold text-gray-700">{selectedOrderDetails.paymentMethod || "Cash on Delivery (COD)"}</span>
+                    </div>
                   </div>
-                )}
-
-                {(selectedOrderDetails.discountAmount || 0) > 0 && (
-                  <div className="flex justify-between text-emerald-600 font-bold">
-                    <span>Discount</span>
-                    <span>-৳{(selectedOrderDetails.discountAmount || 0).toFixed(2)}</span>
-                  </div>
-                )}
-
-                <div className="flex justify-between"><span>Delivery Charge</span><span>৳{selectedOrderDetails.deliveryCharge.toFixed(2)}</span></div>
-                <div className="flex justify-between text-sm font-bold text-gray-900 pt-1 border-t border-gray-100"><span>Net Total Amount</span><span>৳{selectedOrderDetails.totalAmount.toFixed(2)}</span></div>
-              </div>
+                );
+              })()}
             </div>
 
             {/* Footer — Download Invoice */}
