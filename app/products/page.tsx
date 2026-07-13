@@ -750,7 +750,7 @@ const promptVideoUrl = () => {
                           <div className="flex items-center gap-2">
                             <span className="font-semibold text-gray-900 text-sm block group-hover:text-indigo-600 transition-colors">{prod.name}</span>
                             <a 
-                              href={`/products/${prod.slug}`} 
+                              href={`https://onecarta.shop/products/${prod.slug}`}
                               target="_blank" 
                               rel="noopener noreferrer"
                               className="text-gray-400 hover:text-indigo-600 transition-colors p-0.5 rounded"
