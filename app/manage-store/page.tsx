@@ -116,6 +116,13 @@ export default function ManageStoreConfigurationPanel() {
       description: "Control the scrolling coupon/offer announcement strip that shows above the navbar. Leave the message empty to hide it entirely.",
       icon: <Megaphone size={26} className="text-indigo-600" />,
       href: "/manage-store/announcement",
+    },
+    {
+      id: "adm-12",
+      title: "Category Bulk Discount",
+      description: "Apply or remove a percentage/flat discount across every product in a category at once — perfect for running category-wide campaign sales.",
+      icon: <BadgePercent size={26} className="text-indigo-600" />,
+      href: "/manage-store/category-discount",
     }
   ];
 
