@@ -4,7 +4,9 @@ import { ObjectId } from "mongodb";
 
 // Walks the category tree downward from `rootId` and returns the root's own
 // id plus every descendant category id (children, grandchildren, etc., up to
-// 15 levels deep as a safety cap).
+// 15 levels deep as a safety cap) — raw-driver equivalent of the storefront's
+// getDescendantCategoryIds() helper, since this admin app uses the native
+// MongoDB driver instead of Mongoose.
 async function getDescendantCategoryIds(db: any, rootId: ObjectId): Promise<ObjectId[]> {
   const allIds: ObjectId[] = [rootId];
   let frontier: ObjectId[] = [rootId];
@@ -74,42 +76,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ productCount }, { status: 200 });
     }
 
-    // ---- REMOVE: restore each product's own pre-discount price (which may
-    // already have had its own individual manual discount before the bulk
-    // discount was ever applied) — NOT a blind reset to originalPrice, which
-    // would permanently wipe out any discount the product already had. ----
+    // ---- REMOVE: reset price back to originalPrice for the whole category ----
     if (action === "remove") {
       const result = await db.collection("products").updateMany(matchFilter, [
-        {
-          // Fall back to originalPrice only for products that somehow never
-          // got a backup saved (e.g. legacy data) — otherwise use the saved backup.
-          $set: {
-            price: { $ifNull: ["$bulkDiscountBackupPrice", "$originalPrice"] },
-          },
-        },
-        {
-          $set: {
-            discount: {
-              $cond: [
-                { $and: [{ $gt: ["$originalPrice", 0] }, { $gt: ["$originalPrice", "$price"] }] },
-                {
-                  $round: [
-                    {
-                      $multiply: [
-                        { $divide: [{ $subtract: ["$originalPrice", "$price"] }, "$originalPrice"] },
-                        100,
-                      ],
-                    },
-                    0,
-                  ],
-                },
-                0,
-              ],
-            },
-            updatedAt: new Date(),
-          },
-        },
-        { $unset: "bulkDiscountBackupPrice" },
+        { $set: { price: "$originalPrice", discount: 0, updatedAt: new Date() } },
       ]);
       await db.collection("categoryDiscounts").deleteOne({ categoryId: categoryObjectId });
       return NextResponse.json({ success: true, modifiedCount: result.modifiedCount }, { status: 200 });
@@ -127,48 +97,41 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Percentage discount must be less than 100%" }, { status: 400 });
     }
 
-    const newPriceExpr =
+    // Aggregation-pipeline update — price/discount are always recalculated
+    // from `originalPrice` (never from the current, possibly-already-discounted
+    // `price`), so re-applying a new value here always cleanly replaces any
+    // previous category discount instead of stacking on top of it.
+    const updatePipeline =
       discountType === "percentage"
-        ? { $round: [{ $multiply: ["$originalPrice", (100 - value) / 100] }, 0] }
-        : { $max: [0, { $round: [{ $subtract: ["$originalPrice", value] }, 0] }] };
-
-    const newDiscountExpr =
-      discountType === "percentage"
-        ? Math.round(value)
-        : {
-            $round: [
-              {
-                $cond: [
-                  { $gt: ["$originalPrice", 0] },
-                  { $multiply: [{ $divide: [value, "$originalPrice"] }, 100] },
-                  0,
-                ],
+        ? [
+            {
+              $set: {
+                price: { $round: [{ $multiply: ["$originalPrice", (100 - value) / 100] }, 0] },
+                discount: Math.round(value),
+                updatedAt: new Date(),
               },
-              0,
-            ],
-          };
-
-    // Two-stage pipeline:
-    // 1) Back up each product's CURRENT price (before this discount touches
-    //    it) into `bulkDiscountBackupPrice` — but only if a backup doesn't
-    //    already exist. This means re-applying a different value later (or
-    //    stacking a second category discount edit) never overwrites the
-    //    true original price with an already-discounted one.
-    // 2) Then compute the new discounted price from originalPrice.
-    const updatePipeline = [
-      {
-        $set: {
-          bulkDiscountBackupPrice: { $ifNull: ["$bulkDiscountBackupPrice", "$price"] },
-        },
-      },
-      {
-        $set: {
-          price: newPriceExpr,
-          discount: newDiscountExpr,
-          updatedAt: new Date(),
-        },
-      },
-    ];
+            },
+          ]
+        : [
+            {
+              $set: {
+                price: { $max: [0, { $round: [{ $subtract: ["$originalPrice", value] }, 0] }] },
+                discount: {
+                  $round: [
+                    {
+                      $cond: [
+                        { $gt: ["$originalPrice", 0] },
+                        { $multiply: [{ $divide: [value, "$originalPrice"] }, 100] },
+                        0,
+                      ],
+                    },
+                    0,
+                  ],
+                },
+                updatedAt: new Date(),
+              },
+            },
+          ];
 
     const result = await db.collection("products").updateMany(matchFilter, updatePipeline);
 
