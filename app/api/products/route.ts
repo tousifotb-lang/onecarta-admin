@@ -28,7 +28,6 @@ async function resolveCategoryId(
   category: string,
   providedCategoryId?: string
 ): Promise<ObjectId | null> {
-  // 1) If the caller already sent a valid categoryId, just use it.
   if (providedCategoryId && ObjectId.isValid(providedCategoryId)) {
     return new ObjectId(providedCategoryId);
   }
@@ -38,8 +37,6 @@ async function resolveCategoryId(
   const trimmed = category.trim();
   const categoriesCol = db.collection("categories");
 
-  // 2) Try matching by common field names, case-insensitive, against
-  // both the raw category string and a slugified version of it.
   const slugified = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -83,7 +80,6 @@ export async function POST(request: Request) {
       isBestSelling,
     } = data;
 
-    // Strict Validation (matches storefront schema's required fields)
     if (!name || !price || !images || images.length === 0 || !category) {
       return NextResponse.json(
         { error: "Missing required fields (Name, Price, Category, or Images)" },
@@ -105,13 +101,11 @@ export async function POST(request: Request) {
 
     const resolvedIsActive = isActive !== undefined ? isActive : true;
 
-    // Resolve the categoryId reference so storefront queries that filter
-    // by categoryId can actually find this product.
     const resolvedCategoryId = await resolveCategoryId(db, category, categoryId);
 
     const newProduct: Record<string, any> = {
       name: name.trim(),
-      title: name.trim(), // storefront listing also reads `title` on some product docs
+      title: name.trim(),
       slug,
       description: description || "",
       price: finalPrice,
@@ -126,8 +120,6 @@ export async function POST(request: Request) {
       reviewCount: 0,
       tags: tags || [],
       isActive: resolvedIsActive,
-      // storefront's product-listing filter relies on `status`, not just
-      // `isActive` — this was missing before and silently hid new products.
       status: resolvedIsActive ? "ACTIVE" : "INACTIVE",
       isFeatured: isFeatured || false,
       isFlashSale: isFlashSale || false,
@@ -244,16 +236,25 @@ export async function PATCH(request: Request) {
         updateFields.discount = op > p ? Math.round(((op - p) / op) * 100) : 0;
       }
 
-      // Keep status and isActive in sync if either one is being updated,
-      // so partial edits (e.g. toggling just isActive) don't desync them again.
       if (updateFields.isActive !== undefined && updateFields.status === undefined) {
         updateFields.status = updateFields.isActive ? "ACTIVE" : "INACTIVE";
       } else if (updateFields.status !== undefined && updateFields.isActive === undefined) {
         updateFields.isActive = updateFields.status === "ACTIVE";
       }
 
-      // Allow resolving categoryId if a plain category name was passed in an edit
-      if (updateFields.category && !updateFields.categoryId) {
+      // ⚠️ THE FIX: the admin form sends categoryId as a plain string from
+      // the <select> dropdown. If we save that string as-is, MongoDB stores
+      // it as BSON string type — which will NEVER match an ObjectId-typed
+      // query ($in: [ObjectId, ...]) even though the values "look the same".
+      // Always force-cast to a real ObjectId before saving, whether it came
+      // in directly or gets resolved from a category name below.
+      if (updateFields.categoryId) {
+        if (ObjectId.isValid(updateFields.categoryId)) {
+          updateFields.categoryId = new ObjectId(updateFields.categoryId);
+        } else {
+          delete updateFields.categoryId; // garbage value — don't save it
+        }
+      } else if (updateFields.category) {
         const resolved = await resolveCategoryId(db, updateFields.category);
         if (resolved) {
           updateFields.categoryId = resolved;
@@ -289,6 +290,9 @@ export async function PATCH(request: Request) {
       bulkUpdates.status = bulkUpdates.isActive ? "ACTIVE" : "INACTIVE";
     } else if (bulkUpdates.status !== undefined && bulkUpdates.isActive === undefined) {
       bulkUpdates.isActive = bulkUpdates.status === "ACTIVE";
+    }
+    if (bulkUpdates.categoryId && ObjectId.isValid(bulkUpdates.categoryId)) {
+      bulkUpdates.categoryId = new ObjectId(bulkUpdates.categoryId);
     }
 
     const result = await db.collection("products").updateMany(
