@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Plus, Pencil, Trash2, ArrowUp, ArrowDown, Loader2,
-  Image as ImageIcon, X, Layers, LayoutGrid, Link as LinkIcon, Eye, EyeOff
+  Image as ImageIcon, X, Layers, LayoutGrid, Link as LinkIcon, Eye, EyeOff, Calendar
 } from "lucide-react";
 
 interface Banner {
@@ -14,6 +14,9 @@ interface Banner {
   title: string;
   isActive: boolean;
   order: number;
+  scheduleEnabled?: boolean;
+  startDate?: string | null;
+  endDate?: string | null;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -46,6 +49,39 @@ async function uploadToCloudinary(file: File): Promise<string> {
   return data.url;
 }
 
+// Converts an ISO date string into the "YYYY-MM-DDTHH:mm" format the
+// <input type="datetime-local"> element needs — in local time, not UTC.
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Computes the human-readable status badge for a banner, combining the
+// manual isActive toggle with the optional schedule window.
+function getBannerStatus(banner: Banner): { label: string; classes: string } {
+  if (!banner.isActive) {
+    return { label: "Inactive", classes: "bg-gray-100 text-gray-500 border-gray-200" };
+  }
+  if (!banner.scheduleEnabled) {
+    return { label: "Active", classes: "bg-emerald-50 text-emerald-600 border-emerald-100" };
+  }
+
+  const now = new Date();
+  const start = banner.startDate ? new Date(banner.startDate) : null;
+  const end = banner.endDate ? new Date(banner.endDate) : null;
+
+  if (start && now < start) {
+    return { label: "Scheduled", classes: "bg-amber-50 text-amber-600 border-amber-100" };
+  }
+  if (end && now > end) {
+    return { label: "Expired", classes: "bg-red-50 text-red-500 border-red-100" };
+  }
+  return { label: "Active now", classes: "bg-emerald-50 text-emerald-600 border-emerald-100" };
+}
+
 export default function BannersPage() {
   const [banners, setBanners] = useState<Banner[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -57,6 +93,10 @@ export default function BannersPage() {
   const [formHref, setFormHref] = useState("");
   const [formTitle, setFormTitle] = useState("");
   const [formIsActive, setFormIsActive] = useState(true);
+
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -92,6 +132,9 @@ export default function BannersPage() {
     setFormHref("");
     setFormTitle("");
     setFormIsActive(true);
+    setScheduleEnabled(false);
+    setStartDate("");
+    setEndDate("");
     setModalOpen(true);
   };
 
@@ -102,6 +145,9 @@ export default function BannersPage() {
     setFormHref(banner.href);
     setFormTitle(banner.title);
     setFormIsActive(banner.isActive);
+    setScheduleEnabled(!!banner.scheduleEnabled);
+    setStartDate(toDatetimeLocalValue(banner.startDate));
+    setEndDate(toDatetimeLocalValue(banner.endDate));
     setModalOpen(true);
   };
 
@@ -127,30 +173,34 @@ export default function BannersPage() {
       alert("Please upload a banner image first.");
       return;
     }
+    if (scheduleEnabled && startDate && endDate && new Date(startDate) >= new Date(endDate)) {
+      alert("Start date must be before end date.");
+      return;
+    }
+
     setIsSaving(true);
     try {
+      const payload = {
+        imageUrl: formImageUrl,
+        href: formHref || "/",
+        title: formTitle,
+        isActive: formIsActive,
+        scheduleEnabled,
+        startDate: scheduleEnabled && startDate ? new Date(startDate).toISOString() : null,
+        endDate: scheduleEnabled && endDate ? new Date(endDate).toISOString() : null,
+      };
+
       if (editingBanner) {
         await fetch(`/api/banners/${editingBanner._id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            imageUrl: formImageUrl,
-            href: formHref || "/",
-            title: formTitle,
-            isActive: formIsActive,
-          }),
+          body: JSON.stringify(payload),
         });
       } else {
         await fetch("/api/banners", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: modalType,
-            imageUrl: formImageUrl,
-            href: formHref || "/",
-            title: formTitle,
-            isActive: formIsActive,
-          }),
+          body: JSON.stringify({ type: modalType, ...payload }),
         });
       }
       closeModal();
@@ -243,63 +293,79 @@ export default function BannersPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {list.map((banner, index) => (
-            <div key={banner._id} className="flex items-center gap-4 border border-gray-100 rounded-xl p-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={banner.imageUrl}
-                alt={banner.title || "Banner"}
-                className="w-28 h-16 object-cover rounded-lg border border-gray-100 shrink-0"
-              />
+          {list.map((banner, index) => {
+            const status = getBannerStatus(banner);
+            return (
+              <div key={banner._id} className="flex items-center gap-4 border border-gray-100 rounded-xl p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={banner.imageUrl}
+                  alt={banner.title || "Banner"}
+                  className="w-28 h-16 object-cover rounded-lg border border-gray-100 shrink-0"
+                />
 
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-black text-gray-900 truncate">{banner.title || "Untitled banner"}</p>
-                <p className="text-[10px] font-medium text-gray-400 flex items-center gap-1 mt-0.5 truncate">
-                  <LinkIcon size={10} /> {banner.href}
-                </p>
-              </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-xs font-black text-gray-900 truncate">{banner.title || "Untitled banner"}</p>
+                    <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md border shrink-0 ${status.classes}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  <p className="text-[10px] font-medium text-gray-400 flex items-center gap-1 mt-0.5 truncate">
+                    <LinkIcon size={10} /> {banner.href}
+                  </p>
+                  {banner.scheduleEnabled && (banner.startDate || banner.endDate) && (
+                    <p className="text-[10px] font-medium text-gray-400 flex items-center gap-1 mt-0.5">
+                      <Calendar size={10} />
+                      {banner.startDate ? new Date(banner.startDate).toLocaleString() : "Anytime"}
+                      {" → "}
+                      {banner.endDate ? new Date(banner.endDate).toLocaleString() : "No end"}
+                    </p>
+                  )}
+                </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  onClick={() => moveBanner(list, index, "up")}
-                  disabled={index === 0}
-                  className="p-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  <ArrowUp size={13} />
-                </button>
-                <button
-                  onClick={() => moveBanner(list, index, "down")}
-                  disabled={index === list.length - 1}
-                  className="p-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  <ArrowDown size={13} />
-                </button>
-                <button
-                  onClick={() => toggleActive(banner)}
-                  className={`p-1.5 border rounded-lg cursor-pointer ${
-                    banner.isActive
-                      ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-                      : "border-gray-200 text-gray-400 hover:bg-gray-50"
-                  }`}
-                  title={banner.isActive ? "Active — click to hide" : "Hidden — click to show"}
-                >
-                  {banner.isActive ? <Eye size={13} /> : <EyeOff size={13} />}
-                </button>
-                <button
-                  onClick={() => openEditModal(banner)}
-                  className="p-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 cursor-pointer"
-                >
-                  <Pencil size={13} />
-                </button>
-                <button
-                  onClick={() => handleDelete(banner._id)}
-                  className="p-1.5 border border-red-200 rounded-lg text-red-500 hover:bg-red-50 cursor-pointer"
-                >
-                  <Trash2 size={13} />
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => moveBanner(list, index, "up")}
+                    disabled={index === 0}
+                    className="p-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                  <button
+                    onClick={() => moveBanner(list, index, "down")}
+                    disabled={index === list.length - 1}
+                    className="p-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowDown size={13} />
+                  </button>
+                  <button
+                    onClick={() => toggleActive(banner)}
+                    className={`p-1.5 border rounded-lg cursor-pointer ${
+                      banner.isActive
+                        ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                        : "border-gray-200 text-gray-400 hover:bg-gray-50"
+                    }`}
+                    title={banner.isActive ? "Active — click to hide" : "Hidden — click to show"}
+                  >
+                    {banner.isActive ? <Eye size={13} /> : <EyeOff size={13} />}
+                  </button>
+                  <button
+                    onClick={() => openEditModal(banner)}
+                    className="p-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 cursor-pointer"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(banner._id)}
+                    className="p-1.5 border border-red-200 rounded-lg text-red-500 hover:bg-red-50 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -321,10 +387,10 @@ export default function BannersPage() {
           onClick={closeModal}
         >
           <div
-            className="bg-white rounded-2xl max-w-md w-full border border-gray-100 shadow-2xl overflow-hidden"
+            className="bg-white rounded-2xl max-w-md w-full border border-gray-100 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-5 border-b border-gray-50 flex items-center justify-between bg-indigo-50/40">
+            <div className="p-5 border-b border-gray-50 flex items-center justify-between bg-indigo-50/40 shrink-0">
               <h3 className="font-black text-gray-900 text-sm uppercase tracking-wide">
                 {editingBanner ? "Edit Banner" : `Add ${modalType === "hero" ? "Hero" : "Side"} Banner`}
               </h3>
@@ -333,7 +399,7 @@ export default function BannersPage() {
               </button>
             </div>
 
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 overflow-y-auto">
               <div>
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-wide block mb-2">Banner Image</label>
                 {formImageUrl ? (
@@ -400,9 +466,53 @@ export default function BannersPage() {
                 />
                 <span className="text-xs font-bold text-gray-700">Show this banner on the storefront</span>
               </label>
+
+              <div className="border-t border-gray-100 pt-4 space-y-3">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={scheduleEnabled}
+                    onChange={(e) => setScheduleEnabled(e.target.checked)}
+                    className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                    <Calendar size={13} className="text-indigo-500" /> Schedule this banner
+                  </span>
+                </label>
+
+                {scheduleEnabled && (
+                  <div className="grid grid-cols-2 gap-3 pl-6">
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-wide block mb-1.5">Start (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="w-full px-2.5 py-2 border border-gray-200 rounded-lg text-xs font-medium outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-wide block mb-1.5">End (optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="w-full px-2.5 py-2 border border-gray-200 rounded-lg text-xs font-medium outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {scheduleEnabled && (
+                  <p className="text-[10px] text-gray-400 font-medium pl-6 leading-relaxed">
+                    Leave Start empty to go live immediately, or End empty to run indefinitely.
+                    The "Show on storefront" checkbox above still acts as a manual override.
+                  </p>
+                )}
+              </div>
             </div>
 
-            <div className="p-4 border-t border-gray-100 bg-gray-50/60 flex items-center justify-end gap-2.5">
+            <div className="p-4 border-t border-gray-100 bg-gray-50/60 flex items-center justify-end gap-2.5 shrink-0">
               <button
                 onClick={closeModal}
                 className="px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-all cursor-pointer"

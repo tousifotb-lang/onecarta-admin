@@ -3,7 +3,8 @@ import clientPromise from "../../../../lib/mongodb";
 import { ObjectId } from "mongodb";
 
 // PATCH: Update a banner — used for editing fields, toggling isActive,
-// or swapping "order" when the admin moves a banner up/down in the list.
+// updating the schedule window, or swapping "order" when the admin moves a
+// banner up/down in the list.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -21,6 +22,13 @@ export async function PATCH(
     if (body.title !== undefined) updateFields.title = body.title;
     if (body.isActive !== undefined) updateFields.isActive = body.isActive;
     if (body.order !== undefined) updateFields.order = body.order;
+    if (body.scheduleEnabled !== undefined) updateFields.scheduleEnabled = body.scheduleEnabled;
+    if (body.startDate !== undefined) {
+      updateFields.startDate = body.startDate ? new Date(body.startDate) : null;
+    }
+    if (body.endDate !== undefined) {
+      updateFields.endDate = body.endDate ? new Date(body.endDate) : null;
+    }
 
     await db.collection("banners").updateOne(
       { _id: new ObjectId(id) },
