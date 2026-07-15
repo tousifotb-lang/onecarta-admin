@@ -8,7 +8,7 @@ import {
 interface PromoCode {
   _id: string;
   codeName: string;
-  discountType: "flat" | "upto";
+  discountType: "flat" | "upto" | "percentage";
   flatAmount: string;
   basePercentage: string;
   maxDiscountValue: string;
@@ -40,7 +40,7 @@ export default function PromoCodeManagerMatrix() {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const [codeName, setCodeName] = useState("");
-  const [discountType, setDiscountType] = useState<"flat" | "upto">("flat");
+  const [discountType, setDiscountType] = useState<"flat" | "upto" | "percentage">("flat");
   const [flatAmount, setFlatAmount] = useState("");
   const [basePercentage, setBasePercentage] = useState("");
   const [maxDiscountValue, setMaxDiscountValue] = useState("");
@@ -110,14 +110,17 @@ export default function PromoCodeManagerMatrix() {
     setShowModal(true);
   };
 
-  const handleDiscountTypeChange = (type: "flat" | "upto") => {
+  // Discount type switch korle irrelevant field gula clear kore dei
+  const handleDiscountTypeChange = (type: "flat" | "upto" | "percentage") => {
     setDiscountType(type);
+    setFlatAmount("");
     if (type === "flat") {
       setBasePercentage("");
       setMaxDiscountValue("");
-    } else {
-      setHasMinPurchase(true);
+    } else if (type === "upto") {
+      setHasMinPurchase(true); // upto te min purchase always mandatory
     }
+    // percentage: basePercentage/maxDiscountValue/hasMinPurchase shob optional-e thake
   };
 
   const handleSavePromoCode = async (e: React.FormEvent) => {
@@ -242,6 +245,8 @@ export default function PromoCodeManagerMatrix() {
                       <div className="text-base font-bold tracking-tight leading-tight">
                         {promo.discountType === "flat"
                           ? (Number(promo.flatAmount) > 0 ? `৳${promo.flatAmount} Flat Off` : "Free Delivery")
+                          : promo.discountType === "percentage"
+                          ? `${promo.basePercentage}% Off`
                           : `Upto ${promo.basePercentage}% Off`}
                       </div>
                       <div className="flex items-center gap-1 bg-black/10 rounded-lg p-0.5 shrink-0">
@@ -257,14 +262,22 @@ export default function PromoCodeManagerMatrix() {
                           ৳ {promo.minPurchaseValue || "0"}
                         </span>
                       </div>
-                      {(promo.discountType === "upto" || Number(promo.flatAmount) > 0) && (
+                      {promo.discountType === "flat" && Number(promo.flatAmount) > 0 && (
                         <div className="flex flex-col">
-                          <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">
-                            {promo.discountType === "flat" ? "Flat Amount" : "Max Discount"}
-                          </span>
-                          <span className="text-xs font-semibold text-white mt-0.5">
-                            ৳ {promo.discountType === "flat" ? promo.flatAmount || "0" : promo.maxDiscountValue || "0"}
-                          </span>
+                          <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Flat Amount</span>
+                          <span className="text-xs font-semibold text-white mt-0.5">৳ {promo.flatAmount}</span>
+                        </div>
+                      )}
+                      {promo.discountType === "upto" && (
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Max Discount</span>
+                          <span className="text-xs font-semibold text-white mt-0.5">৳ {promo.maxDiscountValue || "0"}</span>
+                        </div>
+                      )}
+                      {promo.discountType === "percentage" && Number(promo.maxDiscountValue) > 0 && (
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Max Discount Cap</span>
+                          <span className="text-xs font-semibold text-white mt-0.5">৳ {promo.maxDiscountValue}</span>
                         </div>
                       )}
                       {promo.hasUsageLimit && (
@@ -348,33 +361,40 @@ export default function PromoCodeManagerMatrix() {
 
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Discount Type</label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => handleDiscountTypeChange("flat")}
-                    className={`px-4 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                      discountType === "flat"
-                        ? "bg-indigo-600 border-indigo-600 text-white"
-                        : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                    className={`px-2 py-2.5 rounded-xl text-[11px] font-bold border transition-colors cursor-pointer ${
+                      discountType === "flat" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
                     }`}
                   >
-                    Flat Discount
+                    Flat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscountTypeChange("percentage")}
+                    className={`px-2 py-2.5 rounded-xl text-[11px] font-bold border transition-colors cursor-pointer ${
+                      discountType === "percentage" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    Percentage
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDiscountTypeChange("upto")}
-                    className={`px-4 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                      discountType === "upto"
-                        ? "bg-indigo-600 border-indigo-600 text-white"
-                        : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                    className={`px-2 py-2.5 rounded-xl text-[11px] font-bold border transition-colors cursor-pointer ${
+                      discountType === "upto" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
                     }`}
                   >
-                    Upto Discount
+                    Upto
                   </button>
                 </div>
                 <p className="text-[10px] text-gray-400 font-medium mt-1.5">
                   {discountType === "flat"
                     ? "Customer will get the full flat amount off once minimum purchase (if set) is met."
+                    : discountType === "percentage"
+                    ? "A simple straight percentage off the order subtotal — same rate no matter how big the cart is, optionally capped. Used for things like the auto-applied first-order discount."
                     : "Discount scales up with order value — starts at base % on max discount, and grows as the order gets bigger, capped at max discount."}
                 </p>
               </div>
@@ -392,6 +412,30 @@ export default function PromoCodeManagerMatrix() {
                     placeholder={freeDelivery ? "Leave empty for a free-delivery-only coupon" : "e.g. 500"}
                     className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
                   />
+                </div>
+              ) : discountType === "percentage" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Discount Percentage (%) <span className="text-red-500">*</span></label>
+                    <input
+                      type="number"
+                      required
+                      value={basePercentage}
+                      onChange={(e) => setBasePercentage(e.target.value)}
+                      placeholder="e.g. 10"
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Max Discount Cap (Optional)</label>
+                    <input
+                      type="number"
+                      value={maxDiscountValue}
+                      onChange={(e) => setMaxDiscountValue(e.target.value)}
+                      placeholder="Leave empty for no cap"
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono"
+                    />
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -420,7 +464,7 @@ export default function PromoCodeManagerMatrix() {
                 </div>
               )}
 
-              {discountType === "flat" ? (
+              {discountType === "flat" || discountType === "percentage" ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
@@ -491,7 +535,7 @@ export default function PromoCodeManagerMatrix() {
                     required
                     value={usageLimitPerUser}
                     onChange={(e) => setUsageLimitPerUser(e.target.value)}
-                    placeholder="e.g. 2"
+                    placeholder="e.g. 1"
                     className="w-full px-3.5 py-2 border border-gray-200 rounded-xl text-xs font-bold bg-white text-gray-700 outline-none focus:border-indigo-500 font-mono animate-slideDown"
                   />
                 )}
@@ -523,9 +567,7 @@ export default function PromoCodeManagerMatrix() {
                       type="button"
                       onClick={() => setFreeDeliveryScope("dhaka")}
                       className={`px-3 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                        freeDeliveryScope === "dhaka"
-                          ? "bg-indigo-600 border-indigo-600 text-white"
-                          : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                        freeDeliveryScope === "dhaka" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
                       }`}
                     >
                       Inside Dhaka Only
@@ -534,9 +576,7 @@ export default function PromoCodeManagerMatrix() {
                       type="button"
                       onClick={() => setFreeDeliveryScope("all")}
                       className={`px-3 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                        freeDeliveryScope === "all"
-                          ? "bg-indigo-600 border-indigo-600 text-white"
-                          : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                        freeDeliveryScope === "all" ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
                       }`}
                     >
                       All Areas (Dhaka + Outside)

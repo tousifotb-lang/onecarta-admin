@@ -35,8 +35,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Code name is required" }, { status: 400 });
     }
 
-    if (discountType !== "flat" && discountType !== "upto") {
-      return NextResponse.json({ error: "Discount type must be 'flat' or 'upto'" }, { status: 400 });
+    if (!["flat", "upto", "percentage"].includes(discountType)) {
+      return NextResponse.json({ error: "Discount type must be 'flat', 'percentage', or 'upto'" }, { status: 400 });
     }
 
     const normalizedCode = codeName.trim().toUpperCase();
@@ -56,6 +56,18 @@ export async function POST(request: Request) {
           { error: "Flat discount amount is required (or enable Free Delivery instead)" },
           { status: 400 }
         );
+      }
+      if (hasMinPurchase && (!minPurchaseValue || Number(minPurchaseValue) <= 0)) {
+        return NextResponse.json({ error: "Minimum purchase value is required" }, { status: 400 });
+      }
+    } else if (discountType === "percentage") {
+      // NEW — straight percentage discount, optionally capped, optional min purchase.
+      // Ei type diye-i NEW10 (10% new-user discount) banano hobe.
+      if (!basePercentage || Number(basePercentage) <= 0) {
+        return NextResponse.json({ error: "Discount percentage is required" }, { status: 400 });
+      }
+      if (Number(basePercentage) >= 100) {
+        return NextResponse.json({ error: "Percentage discount must be less than 100%" }, { status: 400 });
       }
       if (hasMinPurchase && (!minPurchaseValue || Number(minPurchaseValue) <= 0)) {
         return NextResponse.json({ error: "Minimum purchase value is required" }, { status: 400 });
@@ -87,8 +99,8 @@ export async function POST(request: Request) {
       codeName: normalizedCode,
       discountType,
       flatAmount: discountType === "flat" ? flatAmount || "" : "",
-      basePercentage: discountType === "upto" ? basePercentage || "" : "",
-      maxDiscountValue: discountType === "upto" ? maxDiscountValue || "" : "",
+      basePercentage: discountType === "upto" || discountType === "percentage" ? basePercentage || "" : "",
+      maxDiscountValue: discountType === "upto" || discountType === "percentage" ? maxDiscountValue || "" : "",
       hasMinPurchase: discountType === "upto" ? true : !!hasMinPurchase,
       minPurchaseValue:
         discountType === "upto" ? minPurchaseValue || "" : hasMinPurchase ? minPurchaseValue || "" : "",
