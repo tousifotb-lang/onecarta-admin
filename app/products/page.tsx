@@ -31,6 +31,7 @@ interface Product {
   categoryId?: string | null;
   brand?: string;
   stock: number;
+  sold?: number;
   slug: string;
   images?: string[];
   sku?: string;
@@ -496,6 +497,7 @@ const promptVideoUrl = () => {
     setPrice(prod.price != null ? prod.price.toString() : "");
     setDiscountPrice(prod.originalPrice != null ? prod.originalPrice.toString() : "");
     setStock(prod.stock != null ? prod.stock.toString() : "");
+    setInitialSold(prod.sold != null ? prod.sold.toString() : "0");
     setSku(prod.sku || "");
     setBrand(prod.brand || "");
     // Prefer the stored categoryId reference when present (most reliable);
@@ -555,13 +557,10 @@ const promptVideoUrl = () => {
       originalPrice: discountPrice ? Number(discountPrice) : Number(price),
       images: images,
       category: selectedCategory ? selectedCategory.name : "",
-      // Send the actual ObjectId reference directly instead of relying on
-      // the backend to re-resolve it from the category name. This is what
-      // lets the storefront's categoryId-based filters actually find this
-      // product, and avoids ambiguity if two categories share a name.
       categoryId: categoryId || undefined,
       brand,
       stock: Number(stock) || 0,
+      sold: Number(initialSold) || 0,
       isActive: status === "ACTIVE",
       isFeatured,
       isFlashSale,

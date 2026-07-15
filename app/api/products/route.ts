@@ -78,6 +78,7 @@ export async function POST(request: Request) {
       isFeatured,
       isFlashSale,
       isBestSelling,
+      sold, // NEW — "Initial Sold Count" from the admin form (was previously ignored)
     } = data;
 
     if (!name || !price || !images || images.length === 0 || !category) {
@@ -115,7 +116,9 @@ export async function POST(request: Request) {
       category: category.trim(),
       brand: brand || "",
       stock: parseInt(stock) || 0,
-      sold: 0,
+      // ⚠️ FIX: was hardcoded to 0 before, silently ignoring the admin
+      // form's "Initial Sold Count" field entirely.
+      sold: sold !== undefined && sold !== "" ? parseInt(sold) || 0 : 0,
       rating: 0,
       reviewCount: 0,
       tags: tags || [],
@@ -222,6 +225,14 @@ export async function PATCH(request: Request) {
         }
       }
 
+      // Ensure sold, if provided, is saved as a proper number (form sends
+      // it as a string). PATCH already passes updateFields through as-is
+      // otherwise, so without this a string "150" would get stored instead
+      // of the number 150.
+      if (updateFields.sold !== undefined) {
+        updateFields.sold = parseInt(updateFields.sold) || 0;
+      }
+
       // Recompute slug + discount if name/price fields changed, keeping data consistent
       if (updateFields.name) {
         updateFields.slug = updateFields.name
@@ -242,17 +253,12 @@ export async function PATCH(request: Request) {
         updateFields.isActive = updateFields.status === "ACTIVE";
       }
 
-      // ⚠️ THE FIX: the admin form sends categoryId as a plain string from
-      // the <select> dropdown. If we save that string as-is, MongoDB stores
-      // it as BSON string type — which will NEVER match an ObjectId-typed
-      // query ($in: [ObjectId, ...]) even though the values "look the same".
-      // Always force-cast to a real ObjectId before saving, whether it came
-      // in directly or gets resolved from a category name below.
+      // ⚠️ Category-id-as-string bug fix (from earlier) — kept as-is.
       if (updateFields.categoryId) {
         if (ObjectId.isValid(updateFields.categoryId)) {
           updateFields.categoryId = new ObjectId(updateFields.categoryId);
         } else {
-          delete updateFields.categoryId; // garbage value — don't save it
+          delete updateFields.categoryId;
         }
       } else if (updateFields.category) {
         const resolved = await resolveCategoryId(db, updateFields.category);
