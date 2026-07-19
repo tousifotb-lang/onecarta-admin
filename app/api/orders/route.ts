@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import clientPromise from "../../../lib/mongodb";
 import { ObjectId } from "mongodb";
 
-// Minimal shape used only so the MongoDB driver knows statusHistory is an
-// array field it can $push into (fixes "PushOperator<Document>" TS error).
 interface OrderDoc {
   statusHistory?: { status: string; changedAt: Date }[];
   deliveryStatus: string;
@@ -41,23 +39,22 @@ export async function POST(request: Request) {
       customerEmail,
       customerPhone,
       customerAddress,
-      items, // [{ productId, name, qty, unitPrice }]
-      orderType, // "In shop" | "Online"
+      items,
+      orderType,
       deliveryZone,
       deliveryCharge,
       discountPercent,
       discountAmount,
       vatPercent,
       vatAmount,
-      paymentStatus, // "Fully Paid" | "Partial"
+      paymentStatus,
       partialPaidAmount,
       deliveryStatus,
       isFraud,
       note,
-      couponCode, // NEW — promo code applied at storefront checkout, if any
+      couponCode,
     } = data;
 
-    // Validation
     if (!customerName || !customerPhone || !customerAddress) {
       return NextResponse.json(
         { error: "Missing required customer fields (Name, Phone, Address)" },
@@ -73,14 +70,8 @@ export async function POST(request: Request) {
     }
 
     const normalizedCouponCode = couponCode ? String(couponCode).trim().toUpperCase() : "";
-    // Digits-only phone — checkout page already strips non-digits before sending,
-    // so this matches how it will be stored, and lets us count coupon usage per customer.
     const normalizedPhone = String(customerPhone).replace(/\D/g, "");
 
-    // ---- Per-customer coupon usage limit enforcement (final server-side gate) ----
-    // The storefront's "Apply Coupon" step already checks this, but that check can be
-    // bypassed (stale UI state, direct API calls, race conditions between two tabs),
-    // so it's re-verified here right before the order actually gets created.
     if (normalizedCouponCode) {
       const promo = await db.collection("promocodes").findOne({ codeName: normalizedCouponCode });
       if (promo?.hasUsageLimit) {
@@ -110,7 +101,6 @@ export async function POST(request: Request) {
       itemsSubtotal - (Number(discountAmount) || 0) + (Number(vatAmount) || 0) + (Number(deliveryCharge) || 0)
     );
 
-    // Generate a short numeric-style order ID (matches the existing "#2368431" style)
     const orderId = String(Math.floor(1000000 + Math.random() * 9000000));
 
     const createdAt = new Date();
@@ -133,7 +123,7 @@ export async function POST(request: Request) {
       deliveryCharge: Number(deliveryCharge) || 0,
       discountPercent: Number(discountPercent) || 0,
       discountAmount: Number(discountAmount) || 0,
-      couponCode: normalizedCouponCode || null, // NEW — saved so usage-limit counting works
+      couponCode: normalizedCouponCode || null,
       vatPercent: Number(vatPercent) || 0,
       vatAmount: Number(vatAmount) || 0,
       itemsSubtotal,
@@ -141,14 +131,18 @@ export async function POST(request: Request) {
       paymentStatus: paymentStatus === "Fully Paid" ? "PAID" : "PENDING",
       partialPaidAmount: paymentStatus === "Partial" ? Number(partialPaidAmount) || 0 : totalAmount,
       deliveryStatus: initialStatus,
-      // REAL-TIME STATUS TIMELINE: every status this order has ever had, with the
-      // exact timestamp it was set. The "Placed" (or whatever the order starts as)
-      // entry is recorded right away so the timeline has a starting point.
       statusHistory: [
         { status: initialStatus, changedAt: createdAt },
       ],
       isFraud: !!isFraud,
       note: note || "",
+      // Loyalty defaults — manual admin-created orders don't support point
+      // redemption (only storefront checkout does), so these just start empty.
+      pointsEarned: 0,
+      pointsEarnedCredited: false,
+      pointsRedeemed: 0,
+      pointsDiscountAmount: 0,
+      pointsRedeemedRefunded: false,
       createdAt,
       updatedAt: createdAt,
     };
@@ -158,6 +152,89 @@ export async function POST(request: Request) {
     return NextResponse.json({ _id: result.insertedId, ...newOrder }, { status: 201 });
   } catch (error: any) {
     return NextResponse.json({ error: "Failed to create order" }, { status: 500 });
+  }
+}
+
+// Credits loyalty points for every order in `orderIds` that (a) belongs to a
+// registered customer (userId set — guest orders can't earn points), and
+// (b) hasn't already had points credited for it. Points are calculated off
+// the amount actually paid for products (itemsSubtotal minus any coupon/
+// points discounts already applied), never off the delivery charge.
+async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId[]) {
+  const settings = await db.collection("loyaltysettings").findOne({});
+  if (!settings?.isActive) return;
+
+  const earnRateAmount = Number(settings.earnRateAmount) || 0;
+  const earnRatePoints = Number(settings.earnRatePoints) || 0;
+  if (earnRateAmount <= 0 || earnRatePoints <= 0) return;
+
+  const orders = await db.collection("orders").find({
+    _id: { $in: orderIds },
+    userId: { $ne: null },
+    pointsEarnedCredited: { $ne: true },
+  }).toArray();
+
+  for (const order of orders) {
+    const paidForProducts = Math.max(
+      0,
+      (order.itemsSubtotal || 0) - (order.discountAmount || 0) - (order.pointsDiscountAmount || 0)
+    );
+    const pointsEarned = Math.floor(paidForProducts / earnRateAmount) * earnRatePoints;
+
+    if (pointsEarned <= 0) {
+      await db.collection("orders").updateOne({ _id: order._id }, { $set: { pointsEarnedCredited: true, pointsEarned: 0 } });
+      continue;
+    }
+
+    await db.collection("users").updateOne(
+      { _id: order.userId },
+      { $inc: { loyaltyPoints: pointsEarned } }
+    );
+    await db.collection("orders").updateOne(
+      { _id: order._id },
+      { $set: { pointsEarnedCredited: true, pointsEarned } }
+    );
+    await db.collection("loyaltytransactions").insertOne({
+      userId: order.userId,
+      type: "earned",
+      points: pointsEarned,
+      orderId: order._id,
+      description: `Earned from order #${order.orderId}`,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  }
+}
+
+// Refunds any points a customer redeemed on orders that just got
+// Cancelled/Returned, so they aren't penalized for an order that didn't go
+// through. Guarded by pointsRedeemedRefunded to avoid double-refunds.
+async function refundLoyaltyPointsForCancelledOrders(db: any, orderIds: ObjectId[]) {
+  const orders = await db.collection("orders").find({
+    _id: { $in: orderIds },
+    userId: { $ne: null },
+    pointsRedeemed: { $gt: 0 },
+    pointsRedeemedRefunded: { $ne: true },
+  }).toArray();
+
+  for (const order of orders) {
+    await db.collection("users").updateOne(
+      { _id: order.userId },
+      { $inc: { loyaltyPoints: order.pointsRedeemed } }
+    );
+    await db.collection("orders").updateOne(
+      { _id: order._id },
+      { $set: { pointsRedeemedRefunded: true } }
+    );
+    await db.collection("loyaltytransactions").insertOne({
+      userId: order.userId,
+      type: "refunded",
+      points: order.pointsRedeemed,
+      orderId: order._id,
+      description: `Refunded — order #${order.orderId} was ${order.deliveryStatus}`,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
   }
 }
 
@@ -179,9 +256,6 @@ export async function PATCH(request: Request) {
     const objectIds = orderIds.map((id: string) => new ObjectId(id));
     const changedAt = new Date();
 
-    // REAL-TIME STATUS TIMELINE: every time the status changes, push a new
-    // { status, changedAt } entry onto statusHistory instead of overwriting it.
-    // This is how the "View Order" timeline knows exactly when each stage happened.
     const result = await db.collection<OrderDoc>("orders").updateMany(
       { _id: { $in: objectIds } },
       {
@@ -189,6 +263,13 @@ export async function PATCH(request: Request) {
         $push: { statusHistory: { status: deliveryStatus, changedAt } },
       }
     );
+
+    // ---- Loyalty points side-effects ----
+    if (deliveryStatus === "Delivered") {
+      await creditLoyaltyPointsForDeliveredOrders(db, objectIds);
+    } else if (deliveryStatus === "Cancelled" || deliveryStatus === "Returned") {
+      await refundLoyaltyPointsForCancelledOrders(db, objectIds);
+    }
 
     return NextResponse.json(
       { matchedCount: result.matchedCount, modifiedCount: result.modifiedCount },

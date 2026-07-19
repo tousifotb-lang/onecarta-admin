@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, ShoppingCart, ShoppingBag, Users, Image as ImageIcon,
   Tag, FileText, Store, BarChart3, Truck, ShieldCheck, Handshake,
-  Code2, Settings, User, LogOut, ChevronUp, Layers
+  Code2, Settings, User, LogOut, ChevronUp, Layers, Gift
 } from "lucide-react";
 
 export default function Sidebar() {
@@ -52,6 +52,7 @@ export default function Sidebar() {
     { name: "Customers", href: "/customers", icon: Users },
     { name: "Banners", href: "/banners", icon: ImageIcon },
     { name: "Promo Codes", href: "/promo-codes", icon: Tag },
+    { name: "Loyalty Points", href: "/loyalty-points", icon: Gift },
     { name: "Landing Page", href: "/landing-page", icon: FileText },
     { name: "Manage Store", href: "/manage-store", icon: Store },
     { name: "Analytics", href: "/analytics", icon: BarChart3 },
