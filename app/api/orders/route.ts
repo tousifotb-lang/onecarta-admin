@@ -136,8 +136,6 @@ export async function POST(request: Request) {
       ],
       isFraud: !!isFraud,
       note: note || "",
-      // Loyalty defaults — manual admin-created orders don't support point
-      // redemption (only storefront checkout does), so these just start empty.
       pointsEarned: 0,
       pointsEarnedCredited: false,
       pointsRedeemed: 0,
@@ -157,15 +155,22 @@ export async function POST(request: Request) {
 
 // Credits loyalty points for every order in `orderIds` that (a) belongs to a
 // registered customer (userId set — guest orders can't earn points), and
-// (b) hasn't already had points credited for it. Points are calculated off
-// the amount actually paid for products (itemsSubtotal minus any coupon/
-// points discounts already applied), never off the delivery charge.
+// (b) hasn't already had points credited for it.
+//
+// ⚠️ FIX: if the admin has never saved anything on the Loyalty Points
+// settings page, the `loyaltysettings` collection is completely empty, so
+// `findOne({})` returns null. The old code treated a missing settings
+// document as "program disabled" and silently did nothing. It now falls
+// back to the same defaults the public /api/settings/loyalty endpoint uses,
+// so earning works out of the box even before the admin explicitly saves
+// custom rates — matching what checkout already assumes.
 async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId[]) {
-  const settings = await db.collection("loyaltysettings").findOne({});
-  if (!settings?.isActive) return;
+  const settingsDoc = await db.collection("loyaltysettings").findOne({});
+  const isActive = settingsDoc?.isActive ?? true;
+  if (!isActive) return;
 
-  const earnRateAmount = Number(settings.earnRateAmount) || 0;
-  const earnRatePoints = Number(settings.earnRatePoints) || 0;
+  const earnRateAmount = Number(settingsDoc?.earnRateAmount ?? 100) || 0;
+  const earnRatePoints = Number(settingsDoc?.earnRatePoints ?? 1) || 0;
   if (earnRateAmount <= 0 || earnRatePoints <= 0) return;
 
   const orders = await db.collection("orders").find({
@@ -207,8 +212,8 @@ async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId
 }
 
 // Refunds any points a customer redeemed on orders that just got
-// Cancelled/Returned, so they aren't penalized for an order that didn't go
-// through. Guarded by pointsRedeemedRefunded to avoid double-refunds.
+// Cancelled/Returned via the ADMIN panel. (The customer-facing self-cancel
+// route has its own equivalent refund logic — see /api/orders/[id]/cancel.)
 async function refundLoyaltyPointsForCancelledOrders(db: any, orderIds: ObjectId[]) {
   const orders = await db.collection("orders").find({
     _id: { $in: orderIds },
@@ -264,7 +269,6 @@ export async function PATCH(request: Request) {
       }
     );
 
-    // ---- Loyalty points side-effects ----
     if (deliveryStatus === "Delivered") {
       await creditLoyaltyPointsForDeliveredOrders(db, objectIds);
     } else if (deliveryStatus === "Cancelled" || deliveryStatus === "Returned") {
