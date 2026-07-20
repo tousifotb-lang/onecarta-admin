@@ -155,23 +155,18 @@ export async function POST(request: Request) {
 
 // Credits loyalty points for every order in `orderIds` that (a) belongs to a
 // registered customer (userId set — guest orders can't earn points), and
-// (b) hasn't already had points credited for it.
+// (b) hasn't already had points credited.
 //
-// ⚠️ FIX: if the admin has never saved anything on the Loyalty Points
-// settings page, the `loyaltysettings` collection is completely empty, so
-// `findOne({})` returns null. The old code treated a missing settings
-// document as "program disabled" and silently did nothing. It now falls
-// back to the same defaults the public /api/settings/loyalty endpoint uses,
-// so earning works out of the box even before the admin explicitly saves
-// custom rates — matching what checkout already assumes.
+// If the order already has a numeric `pointsEarned` (locked in at checkout —
+// every order placed after this feature shipped), that exact value is used.
+// If `pointsEarned` is missing entirely (a legacy order from before this
+// feature existed on checkout), it's computed now from the CURRENT rate as
+// a one-time fallback, so old orders aren't permanently stuck at zero.
 async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId[]) {
   const settingsDoc = await db.collection("loyaltysettings").findOne({});
   const isActive = settingsDoc?.isActive ?? true;
-  if (!isActive) return;
-
   const earnRateAmount = Number(settingsDoc?.earnRateAmount ?? 100) || 0;
   const earnRatePoints = Number(settingsDoc?.earnRatePoints ?? 1) || 0;
-  if (earnRateAmount <= 0 || earnRatePoints <= 0) return;
 
   const orders = await db.collection("orders").find({
     _id: { $in: orderIds },
@@ -180,49 +175,83 @@ async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId
   }).toArray();
 
   for (const order of orders) {
-    const paidForProducts = Math.max(
-      0,
-      (order.itemsSubtotal || 0) - (order.discountAmount || 0) - (order.pointsDiscountAmount || 0)
-    );
-    const pointsEarned = Math.floor(paidForProducts / earnRateAmount) * earnRatePoints;
+    let pointsEarned: number;
 
-    if (pointsEarned <= 0) {
-      await db.collection("orders").updateOne({ _id: order._id }, { $set: { pointsEarnedCredited: true, pointsEarned: 0 } });
-      continue;
+    if (typeof order.pointsEarned === "number") {
+      pointsEarned = order.pointsEarned;
+    } else {
+      if (!isActive || earnRateAmount <= 0 || earnRatePoints <= 0) {
+        pointsEarned = 0;
+      } else {
+        const basis = Math.max(
+          0,
+          (order.itemsSubtotal || 0) - (order.discountAmount || 0) - (order.pointsDiscountAmount || 0)
+        );
+        pointsEarned = Math.floor(basis / earnRateAmount) * earnRatePoints;
+      }
     }
+
+    await db.collection("orders").updateOne(
+      { _id: order._id },
+      { $set: { pointsEarnedCredited: true, pointsEarned } }
+    );
+
+    if (pointsEarned <= 0) continue;
 
     await db.collection("users").updateOne(
       { _id: order.userId },
       { $inc: { loyaltyPoints: pointsEarned } }
     );
-    await db.collection("orders").updateOne(
-      { _id: order._id },
-      { $set: { pointsEarnedCredited: true, pointsEarned } }
-    );
-    await db.collection("loyaltytransactions").insertOne({
-      userId: order.userId,
-      type: "earned",
-      points: pointsEarned,
+
+    // Convert the pending "earned" transaction (logged at checkout) into a
+    // completed one, or create it now for legacy orders that never got one.
+    const existingPending = await db.collection("loyaltytransactions").findOne({
       orderId: order._id,
-      description: `Earned from order #${order.orderId}`,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      type: "earned",
+      status: "pending",
     });
+
+    if (existingPending) {
+      await db.collection("loyaltytransactions").updateOne(
+        { _id: existingPending._id },
+        {
+          $set: {
+            status: "completed",
+            description: `Earned from order #${order.orderId}`,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    } else {
+      await db.collection("loyaltytransactions").insertOne({
+        userId: order.userId,
+        type: "earned",
+        status: "completed",
+        points: pointsEarned,
+        orderId: order._id,
+        description: `Earned from order #${order.orderId}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
   }
 }
 
-// Refunds any points a customer redeemed on orders that just got
-// Cancelled/Returned via the ADMIN panel. (The customer-facing self-cancel
-// route has its own equivalent refund logic — see /api/orders/[id]/cancel.)
-async function refundLoyaltyPointsForCancelledOrders(db: any, orderIds: ObjectId[]) {
-  const orders = await db.collection("orders").find({
+// Handles BOTH sides of a Cancelled/Returned order:
+// 1. Refunds any REDEEMED points (already deducted from the balance at
+//    checkout) back to the customer.
+// 2. VOIDS any still-PENDING earned points — these were never actually in
+//    the balance, so there's nothing to subtract; this just stops them from
+//    being credited later and records why in the history.
+async function refundAndVoidLoyaltyPointsForCancelledOrders(db: any, orderIds: ObjectId[]) {
+  const ordersWithRedemption = await db.collection("orders").find({
     _id: { $in: orderIds },
     userId: { $ne: null },
     pointsRedeemed: { $gt: 0 },
     pointsRedeemedRefunded: { $ne: true },
   }).toArray();
 
-  for (const order of orders) {
+  for (const order of ordersWithRedemption) {
     await db.collection("users").updateOne(
       { _id: order.userId },
       { $inc: { loyaltyPoints: order.pointsRedeemed } }
@@ -234,12 +263,36 @@ async function refundLoyaltyPointsForCancelledOrders(db: any, orderIds: ObjectId
     await db.collection("loyaltytransactions").insertOne({
       userId: order.userId,
       type: "refunded",
+      status: "completed",
       points: order.pointsRedeemed,
       orderId: order._id,
       description: `Refunded — order #${order.orderId} was ${order.deliveryStatus}`,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+  }
+
+  const ordersWithPendingEarn = await db.collection("orders").find({
+    _id: { $in: orderIds },
+    userId: { $ne: null },
+    pointsEarnedCredited: { $ne: true },
+  }).toArray();
+
+  for (const order of ordersWithPendingEarn) {
+    await db.collection("orders").updateOne(
+      { _id: order._id },
+      { $set: { pointsEarnedCredited: true } } // prevents any future crediting
+    );
+    await db.collection("loyaltytransactions").updateMany(
+      { orderId: order._id, type: "earned", status: "pending" },
+      {
+        $set: {
+          status: "voided",
+          description: `Voided — order #${order.orderId} was ${order.deliveryStatus}`,
+          updatedAt: new Date(),
+        },
+      }
+    );
   }
 }
 
@@ -272,7 +325,7 @@ export async function PATCH(request: Request) {
     if (deliveryStatus === "Delivered") {
       await creditLoyaltyPointsForDeliveredOrders(db, objectIds);
     } else if (deliveryStatus === "Cancelled" || deliveryStatus === "Returned") {
-      await refundLoyaltyPointsForCancelledOrders(db, objectIds);
+      await refundAndVoidLoyaltyPointsForCancelledOrders(db, objectIds);
     }
 
     return NextResponse.json(
