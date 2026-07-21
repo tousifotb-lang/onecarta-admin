@@ -8,6 +8,9 @@ interface OrderDoc {
   updatedAt: Date;
 }
 
+const FINAL_EARN_STATUSES = ["Delivered", "Completed"];
+const REDEMPTION_REFUND_STATUSES = ["Cancelled", "Returned"];
+
 // GET: Fetch all orders from MongoDB, most recent first
 export async function GET() {
   try {
@@ -154,14 +157,7 @@ export async function POST(request: Request) {
 }
 
 // Credits loyalty points for every order in `orderIds` that (a) belongs to a
-// registered customer (userId set — guest orders can't earn points), and
-// (b) hasn't already had points credited.
-//
-// If the order already has a numeric `pointsEarned` (locked in at checkout —
-// every order placed after this feature shipped), that exact value is used.
-// If `pointsEarned` is missing entirely (a legacy order from before this
-// feature existed on checkout), it's computed now from the CURRENT rate as
-// a one-time fallback, so old orders aren't permanently stuck at zero.
+// registered customer, and (b) hasn't already had points credited.
 async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId[]) {
   const settingsDoc = await db.collection("loyaltysettings").findOne({});
   const isActive = settingsDoc?.isActive ?? true;
@@ -177,18 +173,16 @@ async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId
   for (const order of orders) {
     let pointsEarned: number;
 
-    if (typeof order.pointsEarned === "number") {
+    if (typeof order.pointsEarned === "number" && order.pointsEarned > 0) {
       pointsEarned = order.pointsEarned;
+    } else if (!isActive || earnRateAmount <= 0 || earnRatePoints <= 0) {
+      pointsEarned = 0;
     } else {
-      if (!isActive || earnRateAmount <= 0 || earnRatePoints <= 0) {
-        pointsEarned = 0;
-      } else {
-        const basis = Math.max(
-          0,
-          (order.itemsSubtotal || 0) - (order.discountAmount || 0) - (order.pointsDiscountAmount || 0)
-        );
-        pointsEarned = Math.floor(basis / earnRateAmount) * earnRatePoints;
-      }
+      const basis = Math.max(
+        0,
+        (order.itemsSubtotal || 0) - (order.discountAmount || 0) - (order.pointsDiscountAmount || 0)
+      );
+      pointsEarned = Math.floor(basis / earnRateAmount) * earnRatePoints;
     }
 
     await db.collection("orders").updateOne(
@@ -203,8 +197,6 @@ async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId
       { $inc: { loyaltyPoints: pointsEarned } }
     );
 
-    // Convert the pending "earned" transaction (logged at checkout) into a
-    // completed one, or create it now for legacy orders that never got one.
     const existingPending = await db.collection("loyaltytransactions").findOne({
       orderId: order._id,
       type: "earned",
@@ -237,12 +229,58 @@ async function creditLoyaltyPointsForDeliveredOrders(db: any, orderIds: ObjectId
   }
 }
 
-// Handles BOTH sides of a Cancelled/Returned order:
-// 1. Refunds any REDEEMED points (already deducted from the balance at
-//    checkout) back to the customer.
-// 2. VOIDS any still-PENDING earned points — these were never actually in
-//    the balance, so there's nothing to subtract; this just stops them from
-//    being credited later and records why in the history.
+// ⚠️ NEW — Handles the case where an order that WAS Delivered (points
+// already credited into the balance) gets moved to ANY other status —
+// Placed, Shipping, On Hold, Confirmed, Cancelled, Returned, etc. Without
+// this, the customer keeps points for an order that's no longer actually
+// delivered. Deducts the previously-earned points back out (never pushing
+// the balance below 0, in case some of them were already spent), marks the
+// original "earned" transaction as reversed, and resets pointsEarnedCredited
+// so the order can earn fresh points again if it's genuinely re-delivered later.
+async function reverseCreditedLoyaltyPoints(db: any, orderIds: ObjectId[], newStatus: string) {
+  const orders = await db.collection("orders").find({
+    _id: { $in: orderIds },
+    userId: { $ne: null },
+    pointsEarnedCredited: true,
+  }).toArray();
+
+  for (const order of orders) {
+    const pointsToReverse = order.pointsEarned || 0;
+
+    if (pointsToReverse > 0) {
+      const user = await db.collection("users").findOne(
+        { _id: order.userId },
+        { projection: { loyaltyPoints: 1 } }
+      );
+      const currentBalance = user?.loyaltyPoints || 0;
+      const newBalance = Math.max(0, currentBalance - pointsToReverse);
+
+      await db.collection("users").updateOne(
+        { _id: order.userId },
+        { $set: { loyaltyPoints: newBalance } }
+      );
+
+      await db.collection("loyaltytransactions").updateMany(
+        { orderId: order._id, type: "earned", status: "completed" },
+        {
+          $set: {
+            status: "reversed",
+            description: `Reversed — order #${order.orderId} status changed to ${newStatus}`,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    }
+
+    await db.collection("orders").updateOne(
+      { _id: order._id },
+      { $set: { pointsEarnedCredited: false } }
+    );
+  }
+}
+
+// Handles Cancelled/Returned: refunds any REDEEMED points, and voids any
+// still-PENDING earned points (orders that never made it to Delivered).
 async function refundAndVoidLoyaltyPointsForCancelledOrders(db: any, orderIds: ObjectId[]) {
   const ordersWithRedemption = await db.collection("orders").find({
     _id: { $in: orderIds },
@@ -281,7 +319,7 @@ async function refundAndVoidLoyaltyPointsForCancelledOrders(db: any, orderIds: O
   for (const order of ordersWithPendingEarn) {
     await db.collection("orders").updateOne(
       { _id: order._id },
-      { $set: { pointsEarnedCredited: true } } // prevents any future crediting
+      { $set: { pointsEarnedCredited: true } }
     );
     await db.collection("loyaltytransactions").updateMany(
       { orderId: order._id, type: "earned", status: "pending" },
@@ -322,10 +360,16 @@ export async function PATCH(request: Request) {
       }
     );
 
-    if (deliveryStatus === "Delivered") {
+    if (FINAL_EARN_STATUSES.includes(deliveryStatus)) {
       await creditLoyaltyPointsForDeliveredOrders(db, objectIds);
-    } else if (deliveryStatus === "Cancelled" || deliveryStatus === "Returned") {
-      await refundAndVoidLoyaltyPointsForCancelledOrders(db, objectIds);
+    } else {
+      // Moving OFF Delivered/Completed to any other status — reverse
+      // whatever points were already credited for these orders.
+      await reverseCreditedLoyaltyPoints(db, objectIds, deliveryStatus);
+
+      if (REDEMPTION_REFUND_STATUSES.includes(deliveryStatus)) {
+        await refundAndVoidLoyaltyPointsForCancelledOrders(db, objectIds);
+      }
     }
 
     return NextResponse.json(
